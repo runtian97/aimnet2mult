@@ -62,7 +62,15 @@ Repository = "https://github.com/runtian97/aimnet2mult"
 "Bug Tracker" = "https://github.com/runtian97/aimnet2mult/issues"
 
 [tool.setuptools]
-packages = ["aimnet2mult"]
+packages = [
+    "aimnet2mult",
+    "aimnet2mult.config",
+    "aimnet2mult.data",
+    "aimnet2mult.models",
+    "aimnet2mult.tools",
+    "aimnet2mult.train",
+    "aimnet2mult.utils",
+]
 
 [tool.setuptools.package-data]
 aimnet2mult = ["*.pt", "config/*.yaml", "config/*.yml"]
