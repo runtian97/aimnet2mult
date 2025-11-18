@@ -1,0 +1,161 @@
+# Mixed-Fidelity Batches Training Configuration
+#
+# This configuration demonstrates training where BATCHES CAN CONTAIN
+# MOLECULES FROM DIFFERENT FIDELITIES (truly mixed batches)
+
+run_name: mismatched_example
+
+# Fidelity settings
+fidelity_offset: 100
+use_fidelity_readouts: true  # Use fidelity-dependent readouts
+
+data:
+  # Fidelity datasets (specified via command line)
+  fidelity_datasets: {}
+
+  # Fidelity weights (specified via command line)
+  fidelity_weights: {}
+
+  val_fidelity_datasets: null
+
+  # SAE files (specified via command line)
+  sae:
+    energy:
+      files: {}
+      mode: linreg
+
+  # Validation settings
+  val_fraction: 0.1
+  separate_val: true
+  ddp_load_full_dataset: false
+
+  # Input and output keys
+  x: [coord, numbers, charge, mult]
+  y: [energy, forces, charges, spin_charges]
+
+  # Sampler configuration
+  samplers:
+    train:
+      kwargs:
+        batch_size: 32
+        batch_mode: molecules
+        shuffle: true
+        batches_per_epoch: 100
+        sampling_strategy: weighted  # Weighted sampling across fidelities
+
+    val:
+      kwargs:
+        batch_size: 64
+        batch_mode: atoms
+        shuffle: false
+        batches_per_epoch: -1
+        sampling_strategy: uniform
+
+  # DataLoader settings
+  loaders:
+    train:
+      num_workers: 0
+      pin_memory: true
+    val:
+      num_workers: 0
+      pin_memory: true
+
+# Loss function
+loss:
+  class: aimnet.train.loss.MTLoss
+  kwargs:
+    components:
+      energy:
+        fn: aimnet.train.loss.energy_loss_fn
+        weight: 1.0
+      forces:
+        fn: aimnet.train.loss.peratom_loss_fn
+        weight: 0.2
+        kwargs:
+          key_true: forces
+          key_pred: forces
+      charges:
+        fn: aimnet.train.loss.peratom_loss_fn
+        weight: 0.05
+        kwargs:
+          key_true: charges
+          key_pred: charges
+      spin_charges:
+        fn: aimnet.train.loss.peratom_loss_fn
+        weight: 0.05
+        kwargs:
+          key_true: spin_charges
+          key_pred: spin_charges
+
+# Optimizer
+optimizer:
+  force_no_train: []
+  force_train: []
+  class: torch.optim.RAdam
+  kwargs:
+    lr: 0.0001
+    weight_decay: 1e-8
+  param_groups:
+    embeddings:
+      re: 'afv.weight'
+      lr: 0.00005
+      weight_decay: 0.0
+    shifts:
+      re: '.*.atomic_shift.shifts.weight$'
+      weight_decay: 0.0
+
+# Learning rate scheduler
+## Option 1: ReduceLROnPlateau (adaptive, recommended)
+#scheduler:
+#  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+#  kwargs:
+#    metric_name: loss
+#    factor: 0.75              # Reduce LR by 25% each time
+#    patience: 3               # Wait 3 epochs before reducing
+#  terminate_on_low_lr: 1.0e-5 # Stop if LR drops below this threshold
+
+#Option 2: CosineAnnealingScheduler (smooth cosine decay)
+scheduler:
+   class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+   kwargs:
+     param_name: lr
+     start_value: 1.0e-4       # Starting learning rate
+     end_value: 1.0e-6         # Final learning rate
+     cycle_size: 10            # Cycle over 10 epochs (match trainer.epochs)
+   terminate_on_low_lr: 0.0    # Disable early termination (0.0 = disabled)
+
+# Training
+trainer:
+  epochs: 10
+
+# Checkpointing
+checkpoint:
+  dirname: checkpoints
+  filename_prefix: ${run_name}
+  kwargs:
+    n_saved: 2
+    require_empty: false
+
+# Weights & Biases logging
+wandb: null
+
+# Metrics (same configurable format as base aimnet2)
+# Internal units: eV, so scale factor converts eV → kcal/mol
+metrics:
+  class: aimnet2mult.train.metrics.RegMultiMetric
+  kwargs:
+    cfg:
+      energy:
+        abbr: E
+        scale: 23.06  # eV to kcal/mol
+      forces:
+        abbr: F
+        peratom: True
+        mult: 3
+        scale: 23.06  # eV/Å to kcal/mol/Å
+      charges:
+        abbr: q
+        peratom: True
+      spin_charges:
+        abbr: s
+        peratom: True

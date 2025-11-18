@@ -1,0 +1,47 @@
+# Default AIMNet2 model configuration for multifidelity training
+# This uses the standard AIMNet2 architecture as the base
+
+class: aimnet2mult.models.aimnet2.AIMNet2
+kwargs:
+    nfeature: 16
+    d2features: true
+    ncomb_v: 12
+    hidden:
+      - [512, 380]
+      - [512, 380]
+      - [512, 380, 380]
+    aim_size: 256
+    aev:
+      rc_s: 5.0
+      nshifts_s: 16
+    num_charge_channels: 2
+    outputs:
+      energy_mlp:
+        class: aimnet2mult.modules.Output
+        kwargs:
+          n_in: 256
+          n_out: 1
+          key_in: 'aim'
+          key_out: 'energy'
+          mlp:
+            activation_fn: torch.nn.GELU
+            last_linear: true
+            hidden: [128, 128]
+
+      atomic_shift:
+        class: aimnet2mult.modules.AtomicShift
+        kwargs:
+          key_in: 'energy'
+          key_out: 'energy'
+
+      atomic_sum:
+        class: aimnet2mult.modules.AtomicSum
+        kwargs:
+          key_in: 'energy'
+          key_out: 'energy'
+
+      lrcoulomb:
+        class: aimnet2mult.modules.LRCoulomb
+        kwargs:
+          key_in: 'charges'
+          key_out: 'energy'

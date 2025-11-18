@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aimnet2mult"
+version = "0.1.0"
+description = "AIMNet2 multi-fidelity training package - Consolidated Independent Version"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Nick Gao", email = "runtian97@gmail.com"}
+]
+keywords = ["machine learning", "molecular modeling", "neural networks", "quantum chemistry", "multi-fidelity"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.1.0",
+    "numpy>=1.20.0",
+    "h5py>=3.0.0",
+    "pyyaml>=5.0",
+    "omegaconf>=2.0",
+    "opt_einsum>=3.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "pytorch-ignite>=0.5.0",
+    "wandb>=0.12.0",
+]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+]
+all = [
+    "pytorch-ignite>=0.5.0",
+    "wandb>=0.12.0",
+    "pytest>=7.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+]
+
+[project.urls]
+Homepage = "https://github.com/runtian97/aimnet2mult"
+Documentation = "https://github.com/runtian97/aimnet2mult#readme"
+Repository = "https://github.com/runtian97/aimnet2mult"
+"Bug Tracker" = "https://github.com/runtian97/aimnet2mult/issues"
+
+[tool.setuptools]
+packages = ["aimnet2mult"]
+
+[tool.setuptools.package-data]
+aimnet2mult = ["*.pt", "config/*.yaml", "config/*.yml"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
