@@ -8,16 +8,40 @@ AIMNet2Mult is a PyTorch-based package for training and using neural network mod
 
 ## Installation
 
+### Quick Install from GitHub
+
 ```bash
 pip install git+https://github.com/runtian97/aimnet2mult.git
 ```
 
-### From Source
+### Install from Source
+
+**Option 1: Editable/Development Mode** (recommended for development)
 
 ```bash
 git clone https://github.com/runtian97/aimnet2mult.git
 cd aimnet2mult
 pip install -e .
+```
+
+**Option 2: Regular Installation**
+
+```bash
+git clone https://github.com/runtian97/aimnet2mult.git
+cd aimnet2mult
+pip install .
+```
+
+**Option 3: Install with Training Dependencies**
+
+```bash
+pip install -e ".[train]"  # or pip install ".[train]" for non-editable
+```
+
+**Option 4: Install with All Optional Dependencies**
+
+```bash
+pip install -e ".[all]"  # or pip install ".[all]" for non-editable
 ```
 
 ## Requirements
