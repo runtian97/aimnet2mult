@@ -32,18 +32,6 @@ cd aimnet2mult
 pip install .
 ```
 
-**Option 3: Install with Training Dependencies**
-
-```bash
-pip install -e ".[train]"  # or pip install ".[train]" for non-editable
-```
-
-**Option 4: Install with All Optional Dependencies**
-
-```bash
-pip install -e ".[all]"  # or pip install ".[all]" for non-editable
-```
-
 ## Requirements
 
 - Python >= 3.8
