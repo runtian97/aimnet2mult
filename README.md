@@ -1,75 +1,160 @@
-# AIMNet2Mult
+# AIMNet2mult - Multi-Fidelity Neural Network Potential
 
-AIMNet2 Multi-Fidelity Training Package for molecular property prediction using neural networks.
+A PyTorch implementation of AIMNet2 with **mixed-fidelity training** support. Train a single model on datasets from different computational methods simultaneously.
 
-## Overview
+## Key Features
 
-AIMNet2Mult is a PyTorch-based package for training and using neural network models to predict molecular properties at multiple levels of theoretical fidelity. The package supports prediction of energies, forces, atomic charges, and Hessians for molecular systems.
+- **Mixed-Fidelity Training**: Single model learns from multiple data sources with different accuracy levels
+- **Heterogeneous Labels**: Different datasets can have different available properties (energy, forces, charges, etc.)
+- **Automatic Masking**: Loss calculation automatically adapts to available labels per sample
+- **Transfer Learning**: Load pretrained weights and fine-tune on new datasets
+- **TorchScript Export**: Compile models for fast production inference
 
 ## Installation
 
-### Quick Install from GitHub
-
 ```bash
-pip install git+https://github.com/runtian97/aimnet2mult.git
-```
-
-### Install from Source
-
-**Option 1: Editable/Development Mode** (recommended for development)
-
-```bash
-git clone https://github.com/runtian97/aimnet2mult.git
+git clone https://github.com/your-repo/aimnet2mult.git
 cd aimnet2mult
 pip install -e .
 ```
 
-**Option 2: Regular Installation**
+## Package Structure
 
-```bash
-git clone https://github.com/runtian97/aimnet2mult.git
-cd aimnet2mult
-pip install .
+```
+aimnet2mult/
+├── aimnet2mult/                    # Core package
+│   ├── models/                     # Neural network architectures
+│   │   ├── aimnet2.py             # Base AIMNet2 model
+│   │   ├── mixed_fidelity_aimnet2.py  # Multi-fidelity wrapper
+│   │   ├── base.py                # Abstract base classes
+│   │   └── jit_wrapper.py         # TorchScript export utilities
+│   │
+│   ├── data/                       # Data loading and processing
+│   │   ├── base.py                # MultiFidelityDataset base class
+│   │   ├── mixed.py               # MixedFidelityDataset (applies atomic number offsets)
+│   │   ├── sgdataset.py           # Size-grouped HDF5 dataset
+│   │   ├── sampler.py             # Mixed-fidelity batch sampler
+│   │   ├── collate.py             # Collate function with automatic masking
+│   │   └── loaders.py             # DataLoader creation utilities
+│   │
+│   ├── train/                      # Training infrastructure
+│   │   ├── cli.py                 # Command-line interface
+│   │   ├── runner.py              # Training orchestration
+│   │   ├── engine.py              # Ignite engines (trainer/evaluator)
+│   │   ├── loss.py                # Loss functions with masking support
+│   │   ├── metrics.py             # Evaluation metrics
+│   │   ├── configuration.py       # Config loading and validation
+│   │   ├── calc_sae.py            # Self-atomic energy calculation
+│   │   └── utils.py               # Optimizer, scheduler, WandB setup
+│   │
+│   ├── tools/                      # Utilities
+│   │   └── compile_jit.py         # TorchScript compilation
+│   │
+│   ├── config/                     # Configuration system
+│   │   ├── builder.py             # Module instantiation from YAML
+│   │   ├── default_model.yaml     # Default model architecture
+│   │   └── default_train_mixed_fidelity.yaml  # Default training config
+│   │
+│   ├── utils/                      # Utilities
+│   │   ├── derivatives.py         # Hessian and higher-order derivatives
+│   │   ├── units.py               # Unit conversions (Hartree ↔ eV)
+│   │   └── imports.py             # Path utilities
+│   │
+│   ├── modules.py                  # Neural network modules (MLP, Output, etc.)
+│   ├── aev.py                      # Atomic environment vectors
+│   ├── ops.py                      # Tensor operations
+│   ├── nbops.py                    # Neighbor list operations
+│   └── constants.py                # Physical constants
+│
+└── examples/                       # Example scripts and data
+    ├── YAML/                       # Configuration files
+    │   ├── model.yaml             # Model architecture config
+    │   └── train.yaml             # Training parameters config
+    ├── fake_dataset/               # Synthetic datasets for testing
+    │   ├── fidelity0.h5           # High-fidelity (all labels)
+    │   ├── fidelity1.h5           # Mid-fidelity (partial labels)
+    │   └── fidelity2.h5           # Low-fidelity (energy + spin only)
+    │  
+    ├── train.sh                    # Training from scratch
+    ├── train_load_weight.sh        # Transfer learning example
+    └── train_single_fidelity.sh    # Single-fidelity training
 ```
 
-## Requirements
+## Quick Start
 
-- Python >= 3.8
-- PyTorch >= 2.1.0
-- NumPy >= 1.20.0
-- h5py >= 3.0.0
-- PyYAML >= 5.0
-- OmegaConf >= 2.0
-- opt_einsum >= 3.0
+### Training
 
-For training:
-- pytorch-ignite >= 0.5.0
-- wandb >= 0.12.0 (optional, for experiment tracking)
+See example scripts in `examples/`:
 
-## Quick Start - Using Trained Models
+```bash
+# Train from scratch with 3 fidelities
+bash examples/train.sh
 
-### Basic Example
+# Transfer learning from pretrained model
+bash examples/train_load_weight.sh
+
+# Single-fidelity training
+bash examples/train_single_fidelity.sh
+```
+
+**Configuration files:**
+- `examples/YAML/train.yaml` - Training parameters, dataset paths, loss weights
+- `examples/YAML/model.yaml` - Model architecture (layer sizes, features, etc.)
+
+## Data Format
+
+Molecular data is stored in HDF5 files with molecules grouped by atom count:
+
+```
+dataset.h5
+├── 3/                          # Molecules with 3 atoms
+│   ├── coord                   # (n_mols, 3, 3) float32 - Cartesian coordinates (Å)
+│   ├── numbers                 # (n_mols, 3) int32 - Atomic numbers
+│   ├── charge                  # (n_mols,) float32 - Total molecular charge
+│   ├── energy                  # (n_mols,) float32 - Total energy (eV) 
+│   ├── forces                  # (n_mols, 3, 3) float32 - Atomic forces (eV/Å) [OPTIONAL]
+│   ├── charges                 # (n_mols, 3) float32 - Partial atomic charges (e) [OPTIONAL]
+│   ├── spin_charges            # (n_mols, 3) float32 - Spin densities (e) [OPTIONAL]
+│   └── mult                    # (n_mols,) float32 - Spin multiplicity [OPTIONAL, defaults to 1]
+│
+├── 4/                          # Molecules with 4 atoms
+│   ├── coord                   # (n_mols, 4, 3) float32
+│   ├── numbers                 # (n_mols, 4) int32
+│   └── ...
+│
+└── N/                          # Molecules with N atoms
+    └── ...
+```
+
+**Notes:**
+- `coord`, `numbers`, `charge`, and `energy` are required fields
+- All other labels (`forces`, `charges`, `spin_charges`, `mult`) are optional
+- Different datasets can have different combinations of optional labels
+- Missing labels are automatically masked during training
+
+### Inference
+
+#### Load TorchScript Model
 
 ```python
 import torch
 from openbabel import pybel
 
-# Load the JIT-compiled model
-filename = 'model.jpt'
+# Load compiled model
+filename = '/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run/model_fid1.jpt'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = torch.jit.load(filename, map_location=device)
 
-# Read molecule from file (SDF, MOL2, PDB, etc.)
-mol_file = 'molecule.sdf'
+# Load molecule
+mol_file = '/Users/nickgao/Desktop/pythonProject/local_code_template/test_sdfs/CAMVES_a.sdf'
 mol = next(pybel.readfile('sdf', mol_file))
 
-# Extract molecular information
+# Prepare input
 coord = torch.as_tensor([a.coords for a in mol.atoms]).unsqueeze(0).to(device)
 numbers = torch.as_tensor([a.atomicnum for a in mol.atoms]).unsqueeze(0).to(device)
 charge = torch.as_tensor([mol.charge]).to(device)
 mult = torch.as_tensor([mol.spin]).to(device)
 
-# Prepare input dictionary
 _in = dict(
     coord=coord,
     numbers=numbers,
@@ -77,209 +162,85 @@ _in = dict(
     mult=mult,
 )
 
-# Run prediction
+# Run inference
 _out = model(_in)
-
-# Access predictions
-print("Energy:", _out['energy'])
-print("Atomic charges:", _out['charges'])
-print("Spin charges:", _out['spin_charges'])
+energy = _out['energy']         # Total energy (eV)
+forces = _out['forces']         # Atomic forces (eV/Å)
+charges = _out['charges']       # Partial charges (e)
+spin = _out['spin_charges']     # Spin densities (e)
 ```
 
-### Computing Forces and Hessian
+#### Compute Hessian (Second Derivatives)
 
 ```python
 import torch
 from openbabel import pybel
 from aimnet2mult.models.jit_wrapper import load_jit_model
 
-# Load model with wrapper (enables force/Hessian computation)
+# Load the TorchScript model
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-model = load_jit_model('model.jpt', device=device)
+model_path = "/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run/model_fid1.jpt"
 
-# Read molecule
-mol = next(pybel.readfile('sdf', 'molecule.sdf'))
+model = load_jit_model(model_path)
+mol_path = '/Users/nickgao/Desktop/pythonProject/local_code_template/test_sdfs/CAMVES_a.sdf'
 
-# Convert to tensors
+# Load molecule
+mol = next(pybel.readfile('sdf', mol_path))
+
+# Prepare input with gradient tracking
 coord = torch.as_tensor([a.coords for a in mol.atoms]).unsqueeze(0).to(device)
+coord.requires_grad_(True)  # Enable gradient for Hessian computation
 numbers = torch.as_tensor([a.atomicnum for a in mol.atoms]).unsqueeze(0).to(device)
 charge = torch.as_tensor([mol.charge]).to(device)
 mult = torch.as_tensor([mol.spin]).to(device)
 
-_in = {
-    "coord": coord,
-    "numbers": numbers,
-    "charge": charge,
-    "mult": mult
-}
+_in = {"coord": coord, "numbers": numbers, "charge": charge, "mult": mult}
 
-# Compute forces and Hessian (wrapper handles gradient computation automatically)
+# Predict forces and Hessian
 _out = model(_in, compute_hessian=True, hessian_mode="autograd")
 
-print("Energy:", _out['energy'])
-print("Forces shape:", _out['forces'].shape)  # (batch_size, n_atoms, 3)
-print("Hessian shape:", _out['hessian'].shape)  # (batch_size, n_atoms, 3, n_atoms, 3)
+print("Forces shape:", _out["forces"])
+print("Hessian:", _out["hessian"])
+print(_out.keys())
 ```
 
-### Understanding Model Outputs
+## Core Concepts
 
-```python
-# After running prediction with _out = model(_in)
+### Mixed-Fidelity Training
 
-# Molecular properties
-energy = _out['energy']              # Total molecular energy
-charges = _out['charges']            # Atomic charges
-spin_charges = _out['spin_charges']  # Atomic spin densities
+Train on datasets from different computational methods simultaneously:
 
-# Molecular geometry
-coord = _out['coord']                # Atomic coordinates (input echoed)
-numbers = _out['numbers']            # Atomic numbers (input echoed)
-natom = _out['_natom']              # Number of atoms
+- **Atomic Number Offsetting**: Element Z becomes Z, Z+100, Z+200 for fidelities 0, 1, 2
+- **Fidelity-Specific Layers**: Each fidelity has its own readout layers and embeddings
+- **Weighted Sampling**: Control how often each fidelity is sampled during training
 
-# Atomic features
-a = _out['a']                        # Atomic feature vectors
-aim = _out['aim']                    # AIMNet2 convolution outputs (local environment)
+### Heterogeneous Labels
 
-# Geometric descriptors
-d_ij = _out['d_ij']                  # Pairwise distance matrix
-gs = _out['gs']                      # Scalar geometric features
-gv = _out['gv']                      # Vector geometric features
+Different datasets can have different available properties:
 
-# Derived features
-afv = _out['a'].flatten(-2, -1)     # Atomic feature vector (flattened)
-```
+| Dataset | energy | forces | charges | spin | mult |
+|---------|--------|--------|---------|------|------|
+| Fid0    | ✓      | ✓      | ✓       | ✓    | ✓    |
+| Fid1    | ✓      | ✓      | ✓       | ✗    | ✗    |
+| Fid2    | ✓      | ✗      | ✗       | ✓    | ✗    |
 
-### Reading Molecular Information from Files
+The collate function automatically creates masks, and loss functions skip missing labels.
 
-The package works with various molecular file formats through OpenBabel:
+### Self-Atomic Energy (SAE)
 
-```python
-from openbabel import pybel
-
-# Supported formats: SDF, MOL2, PDB, XYZ, etc.
-mol = next(pybel.readfile('sdf', 'molecule.sdf'))
-
-# Extract molecular properties
-coordinates = [a.coords for a in mol.atoms]      # List of [x, y, z] for each atom
-atomic_numbers = [a.atomicnum for a in mol.atoms] # Atomic numbers (6=C, 1=H, etc.)
-molecular_charge = mol.charge                     # Total charge
-spin_multiplicity = mol.spin                      # 1=singlet, 2=doublet, 3=triplet, etc.
-
-# Convert to PyTorch tensors
-import torch
-coord = torch.as_tensor(coordinates).unsqueeze(0)
-numbers = torch.as_tensor(atomic_numbers).unsqueeze(0)
-charge = torch.as_tensor([molecular_charge])
-mult = torch.as_tensor([spin_multiplicity])
-```
-
-## Model Features
-
-The trained models provide rich molecular representations:
-
-- **energy**: Total molecular energy
-- **forces**: Atomic forces (gradients of energy w.r.t. coordinates)
-- **hessian**: Second derivatives (for vibrational analysis)
-- **charges**: Atomic charges
-- **spin_charges**: Atomic spin densities
-- **a**: Atomic feature vectors
-- **aim**: AIMNet2 convolution outputs (local environment encoding)
-- **d_ij**: Interatomic distances
-- **gs**: Scalar geometric features
-- **gv**: Vector geometric features
-
-### Optional D3 Dispersion Correction
-
-The package includes implementations of DFTD3-BJ dispersion correction and D3-TS (Tkatchenko-Scheffler) combination rules that can be optionally configured during model training for improved accuracy of long-range interactions. These corrections are available as modular components that can be added to the model architecture through the configuration files.
-
-## Training Your Own Models
-
-Training examples including example datasets and input configuration files are available in the `examples/` folder.
-
-### Configuration Files
-
-See `examples/mismatched/` for example configuration:
-- `train.yaml`: Training configuration (data paths, hyperparameters, learning rates, etc.)
-- `model.yaml`: Model architecture configuration (layers, features, dispersion corrections, etc.)
-
-### Training Data Format
-
-Training data should be in HDF5 format containing:
-- Molecular geometries (coordinates and atomic numbers)
-- Target properties (energies, forces, charges, etc.)
-- Metadata (charge, spin multiplicity)
-
-### Run Training
+Removes atomic baseline energies before training:
 
 ```bash
-cd examples
-bash train.sh
+# Calculate SAE for each dataset
+python -m aimnet2mult.train.calc_sae dataset.h5 sae.yaml
 ```
 
-The training script will:
-1. Load configuration from YAML files
-2. Initialize the model architecture
-3. Load training and validation datasets
-4. Train with the specified hyperparameters
-5. Save checkpoints and final model
+SAE is applied during data loading: `E_corrected = E_raw - Σ SAE[atom_i]`
 
-### Custom Training
-
-```python
-from aimnet2mult.train import train_mixed_fidelity
-
-# Configure and run training
-# See examples/mismatched/train.yaml for all configuration options
-```
-
-## Examples
-
-The `examples/` directory contains:
-
-- **`aim_aev_afv.ipynb`**: Jupyter notebook demonstrating model loading, inference, and accessing all model outputs
-- **`train.sh`**: Shell script for training models
-- **`mismatched/`**: Example training configuration files
-  - `train.yaml`: Complete training setup
-  - `model.yaml`: Model architecture definition
-
-See `get_hess_force.py` in the root directory for a complete example of computing forces and Hessians.
-
-## Package Structure
-
-```
-aimnet2mult/
-├── models/              # Model architectures and JIT wrapper
-├── data/                # Dataset and data loading utilities
-├── train/               # Training loops and utilities
-├── tools/               # Helper tools (JIT compilation, etc.)
-├── config/              # Configuration builders
-├── utils/               # General utilities
-├── modules.py           # Neural network modules (including D3 correction)
-├── aev.py              # Atomic environment vector computation
-├── ops.py              # Core tensor operations
-├── nbops.py            # Neighbor list operations
-├── constants.py        # Physical constants and parameters
-└── d3bj_data.pt        # D3 dispersion correction parameters
-
-examples/
-├── mismatched/         # Example training configuration
-│   ├── train.yaml     # Training parameters
-│   └── model.yaml     # Model architecture
-├── train.sh           # Training script
-└── aim_aev_afv.ipynb  # Jupyter notebook demonstrating model usage
-
-sample_data/           # Example datasets
-get_hess_force.py      # Example: computing forces and Hessians
-```
-
-## Citation
-
-If you use AIMNet2Mult in your research, please cite the relevant publications.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License - Copyright (c) 2025 AIMNet2Mult Contributors
 
-## Support
+See [LICENSE](LICENSE) file for full details.
 
-For questions and issues, please open an issue on the GitHub repository.

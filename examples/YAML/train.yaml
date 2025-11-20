@@ -136,8 +136,18 @@ checkpoint:
     n_saved: 2
     require_empty: false
 
-# Weights & Biases logging
-wandb: null
+# Weights & Biases logger
+wandb:
+  init:
+    name: ${run_name}
+    mode: online
+    entity: null
+    project: ${project_name}
+    notes: null
+  watch_model:
+    log: all
+    log_freq: 5000
+    log_graph: true
 
 # Metrics (same configurable format as base aimnet2)
 # Internal units: eV, so scale factor converts eV → kcal/mol

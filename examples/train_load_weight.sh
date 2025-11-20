@@ -1,12 +1,16 @@
 #!/bin/bash
 
+# Transfer learning: Load pretrained weights and fine-tune
+# Just adds --load flag to train.sh
+
 # Wandb configuration
-RUN_NAME="mixed_fidelity_experiment_001"
+RUN_NAME="transfer_learning_001"
 PROJECT_NAME="aimnet2_mixed_fidelity"
 
 # Configuration paths
 CONFIG_FILE="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/YAML/train.yaml"
 MODEL_FILE="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/YAML/model.yaml"
+PRETRAINED_WEIGHTS="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run/model.pt"
 FIDELITY_0_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity0.h5"
 FIDELITY_1_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity1.h5"
 FIDELITY_2_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity2.h5"
@@ -16,7 +20,7 @@ FIDELITY_2_WEIGHT=1.0
 SAE_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset"
 OUTPUT_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run"
 SAVE_PATH="${OUTPUT_DIR}/model.pt"
-OUTPUT_PREFIX="${OUTPUT_DIR}/model"
+OUTPUT_PREFIX="${OUTPUT_DIR}/model_finetuned"
 NUM_FIDELITIES=3
 FIDELITY_OFFSET=100
 USE_FIDELITY_READOUTS=True
@@ -35,13 +39,15 @@ python -m aimnet2mult.train.calc_sae "${FIDELITY_0_DATASET}" "${SAE_FID0}"
 python -m aimnet2mult.train.calc_sae "${FIDELITY_1_DATASET}" "${SAE_FID1}"
 python -m aimnet2mult.train.calc_sae "${FIDELITY_2_DATASET}" "${SAE_FID2}"
 
-# Step 2: Train
+# Step 2: Train with --load (transfer learning)
 python -m aimnet2mult.train.cli \
+    --load "${PRETRAINED_WEIGHTS}" \
     --config "${CONFIG_FILE}" \
     --model "${MODEL_FILE}" \
     --save "${SAVE_PATH}" \
     run_name="${RUN_NAME}" \
     project_name="${PROJECT_NAME}" \
+    wandb=null \
     data.fidelity_datasets.0="${FIDELITY_0_DATASET}" \
     data.fidelity_datasets.1="${FIDELITY_1_DATASET}" \
     data.fidelity_datasets.2="${FIDELITY_2_DATASET}" \

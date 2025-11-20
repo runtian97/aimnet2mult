@@ -33,9 +33,9 @@ def calc_sae(ds, output, samples=100000):
     # save
     with open(output, 'w') as f:
         for k, v in sae.items():
-            str = f'{k}: {v}\n'
-            f.write(f'{k}: {v}\n')
-            print(str, end='')
+            line = f'{k}: {v}\n'
+            f.write(line)
+            print(line, end='')
 
 
 if __name__ == '__main__':

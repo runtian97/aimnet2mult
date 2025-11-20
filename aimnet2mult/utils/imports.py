@@ -9,8 +9,12 @@ from typing import Optional
 __all__ = ["ensure_aimnet2_on_path"]
 
 
+def ensure_aimnet2_on_path() -> Optional[str]:
     """
     Insert the sibling ``aimnet2`` repository into ``sys.path`` if needed.
+
+    Returns:
+        Path to aimnet2 if found and added, None otherwise.
     """
     current = Path(__file__).resolve()
     parents = current.parents

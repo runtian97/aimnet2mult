@@ -3,7 +3,7 @@
 from importlib import import_module
 from typing import Any
 
-__all__ = ["compile_jit", "compute_sae", "create_test_datasets"]
+__all__ = ["compile_jit"]
 
 
 def __getattr__(name: str) -> Any:

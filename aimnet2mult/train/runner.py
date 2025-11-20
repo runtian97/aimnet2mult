@@ -68,9 +68,59 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
         model = idist.auto_model(model)
 
     if load_path is not None:
-        logging.info("Loading weights from %s", load_path)
-        state_dict = torch.load(load_path, map_location=device)
-        result = unwrap_module(model).load_state_dict(state_dict, strict=False)
+        logging.info("Loading pretrained weights from %s", load_path)
+        checkpoint = torch.load(load_path, map_location=device)
+
+        # Handle both old format (bare state_dict) and new format (dict with 'model' key)
+        if isinstance(checkpoint, dict) and "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            # Old format or bare state_dict
+            state_dict = checkpoint
+
+        # For mixed-fidelity models, manually handle embedding expansion
+        # Don't let pretrained embeddings overwrite the expanded ones
+        unwrapped = unwrap_module(model)
+        if isinstance(unwrapped, MixedFidelityAIMNet2):
+            # Get current embedding sizes (already expanded)
+            current_afv_size = unwrapped.afv.weight.shape[0]
+
+            # If state_dict has smaller embeddings, expand them before loading
+            if 'afv.weight' in state_dict:
+                pretrained_afv = state_dict['afv.weight']
+                pretrained_size = pretrained_afv.shape[0]
+
+                if pretrained_size < current_afv_size:
+                    logging.info(f"Expanding afv embedding from {pretrained_size} to {current_afv_size}")
+                    # Create expanded embedding and copy pretrained weights
+                    expanded_afv = torch.zeros(current_afv_size, pretrained_afv.shape[1])
+                    expanded_afv[:pretrained_size] = pretrained_afv
+                    state_dict['afv.weight'] = expanded_afv
+
+            # Handle atomic shift embeddings similarly
+            for key in list(state_dict.keys()):
+                if 'atomic_shift.shifts.weight' in key:
+                    # Extract the corresponding module from the current model
+                    parts = key.split('.')
+                    current_module = unwrapped
+                    for part in parts[:-1]:  # Navigate to the shifts module
+                        if hasattr(current_module, part):
+                            current_module = getattr(current_module, part)
+                        elif isinstance(current_module, nn.ModuleDict) and part in current_module:
+                            current_module = current_module[part]
+
+                    if hasattr(current_module, 'weight'):
+                        current_size = current_module.weight.shape[0]
+                        pretrained_shifts = state_dict[key]
+                        pretrained_size = pretrained_shifts.shape[0]
+
+                        if pretrained_size < current_size:
+                            logging.info(f"Expanding {key} from {pretrained_size} to {current_size}")
+                            expanded_shifts = torch.zeros(current_size, pretrained_shifts.shape[1])
+                            expanded_shifts[:pretrained_size] = pretrained_shifts
+                            state_dict[key] = expanded_shifts
+
+        result = unwrapped.load_state_dict(state_dict, strict=False)
         logging.info(result)
 
     logging.info("Creating mixed-fidelity data loaders...")
@@ -99,9 +149,10 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
         logging.info("Setting up Weights & Biases logging...")
         setup_wandb(train_cfg, model_cfg, model, trainer, validator, optimizer)
 
-    logging.info("Starting training for %d epochs", train_cfg.trainer.epochs)
+    total_epochs = train_cfg.trainer.epochs
+    logging.info("Starting training for %d epochs", total_epochs)
     logging.info("=" * 80)
-    trainer.run(train_loader, max_epochs=train_cfg.trainer.epochs)
+    trainer.run(train_loader, max_epochs=total_epochs)
     logging.info("Training completed successfully!")
     if idist.get_local_rank() == 0:
         if save_path is not None:
@@ -114,8 +165,14 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
                 checkpoint_cfg.dirname,
                 f"{checkpoint_cfg.filename_prefix}_final.pt",
             )
-        logging.info("Saving model to %s", final_path)
-        torch.save({"model": unwrap_module(model).state_dict()}, final_path)
+        logging.info("Saving final model to %s", final_path)
+
+        # Save checkpoint with model weights only (simpler format for transfer learning)
+        checkpoint_dict = {
+            "model": unwrap_module(model).state_dict(),
+        }
+
+        torch.save(checkpoint_dict, final_path)
 
 
 class TerminateOnLowLR:
@@ -253,4 +310,10 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
         kwargs["dirname"] = checkpoint_cfg.dirname
         kwargs["filename_prefix"] = checkpoint_cfg.filename_prefix
         checkpointer = ModelCheckpoint(**kwargs)
-        validator.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, {"model": unwrap_module(model)})
+
+        # Prepare checkpoint objects dict
+        to_save = {"model": unwrap_module(model), "optimizer": optimizer}
+        if scheduler is not None:
+            to_save["scheduler"] = scheduler
+
+        validator.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, to_save)
