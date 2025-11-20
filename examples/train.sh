@@ -21,9 +21,6 @@ NUM_FIDELITIES=3
 FIDELITY_OFFSET=100
 USE_FIDELITY_READOUTS=True
 
-REPO_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult"
-export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
-
 mkdir -p "${SAE_DIR}" "${OUTPUT_DIR}"
 
 SAE_FID0="${SAE_DIR}/sae_fid0.yaml"

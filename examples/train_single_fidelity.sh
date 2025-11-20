@@ -20,9 +20,6 @@ NUM_FIDELITIES=1
 FIDELITY_OFFSET=100
 USE_FIDELITY_READOUTS=True
 
-REPO_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult"
-export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
-
 mkdir -p "${SAE_DIR}" "${OUTPUT_DIR}"
 
 SAE_FID0="${SAE_DIR}/sae_fid0.yaml"
@@ -37,7 +34,6 @@ python -m aimnet2mult.train.cli \
     --save "${SAVE_PATH}" \
     run_name="${RUN_NAME}" \
     project_name="${PROJECT_NAME}" \
-    wandb=null \
     data.fidelity_datasets.0="${FIDELITY_0_DATASET}" \
     data.fidelity_weights.0="${FIDELITY_0_WEIGHT}" \
     data.sae.energy.files.0="${SAE_FID0}"
