@@ -15,7 +15,7 @@ A PyTorch implementation of AIMNet2 with **mixed-fidelity training** support. Tr
 ```bash
 git clone https://github.com/your-repo/aimnet2mult.git
 cd aimnet2mult
-pip install -e .
+pip install .
 ```
 
 ## Package Structure
