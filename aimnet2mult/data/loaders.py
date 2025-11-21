@@ -40,7 +40,7 @@ def create_mixed_fidelity_loaders(cfg) -> Tuple["MixedFidelityDataLoader", "Mixe
     if fidelity_weights is not None:
         fidelity_weights = dict(fidelity_weights)
 
-    fidelity_offset = cfg.get("fidelity_offset", 100)
+    fidelity_offset = cfg.get("fidelity_offset", 200)
     mf_dataset_train = MixedFidelityDataset(
         fidelity_datasets,
         fidelity_weights=fidelity_weights,

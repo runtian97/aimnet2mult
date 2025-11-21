@@ -27,7 +27,7 @@ class EagerFidelityModel(torch.nn.Module):
         model: torch.nn.Module,
         sae: Dict[int, float],
         fidelity_level: int,
-        fidelity_offset: int = 100,
+        fidelity_offset: int = 200,
     ) -> None:
         super().__init__()
         self.model = model
@@ -142,7 +142,7 @@ def load_eager_model(
     base_model = MixedFidelityAIMNet2(
         base_model_config=model_cfg,
         num_fidelities=len(train_cfg.data.fidelity_datasets),
-        fidelity_offset=train_cfg.get("fidelity_offset", 100),
+        fidelity_offset=train_cfg.get("fidelity_offset", 200),
         use_fidelity_readouts=train_cfg.get("use_fidelity_readouts", True),
     ).to(device)
     checkpoint_data = torch.load(checkpoint, map_location=device)
@@ -162,7 +162,7 @@ def load_eager_model(
         base_model,
         sae_mapping,
         fidelity_level=fidelity,
-        fidelity_offset=train_cfg.get("fidelity_offset", 100),
+        fidelity_offset=train_cfg.get("fidelity_offset", 200),
     ).to(device)
     wrapper.eval()
     return wrapper

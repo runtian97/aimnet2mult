@@ -10,7 +10,7 @@ run_name: ???
 project_name: ???
 
 # Fidelity settings
-fidelity_offset: 100              # Offset between fidelities
+fidelity_offset: 200              # Offset between fidelities
 use_fidelity_readouts: true       # Use separate readouts per fidelity
 
 data:

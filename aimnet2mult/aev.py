@@ -17,7 +17,7 @@ class AEVSV(nn.Module):
     rc_s : float, optional
         Cutoff radius for scalar features. Default is 5.0.
     nshifts_s : int, optional
-        Number of shifts for scalar features. Default is 16.
+        Number of shifts for scalar features. Default is 32.
     eta_s : Optional[float], optional
         Width of the Gaussian basis functions for scalar features. Will estimate reasonable default.
     rc_v : Optional[float], optional
@@ -36,7 +36,7 @@ class AEVSV(nn.Module):
         self,
         rmin: float = 0.8,
         rc_s: float = 5.0,
-        nshifts_s: int = 16,
+        nshifts_s: int = 32,
         eta_s: Optional[float] = None,
         rc_v: Optional[float] = None,
         nshifts_v: Optional[int] = None,

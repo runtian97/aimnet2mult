@@ -17,7 +17,7 @@ OUTPUT_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run"
 SAVE_PATH="${OUTPUT_DIR}/model_single_fidelity.pt"
 OUTPUT_PREFIX="${OUTPUT_DIR}/model_single_fidelity"
 NUM_FIDELITIES=1
-FIDELITY_OFFSET=100
+FIDELITY_OFFSET=200
 USE_FIDELITY_READOUTS=True
 
 mkdir -p "${SAE_DIR}" "${OUTPUT_DIR}"

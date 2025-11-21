@@ -41,7 +41,7 @@ class FidelityModelWithSAE(nn.Module):
         model: nn.Module,
         sae: Dict[int, float],
         fidelity_level: int,
-        fidelity_offset: int = 100,
+        fidelity_offset: int = 200,
         cutoff: float = 5.0,
         cutoff_lr: float = float('inf')
     ):
@@ -144,7 +144,7 @@ def compile_model_with_sae(checkpoint_path: str, output_prefix: str, model_confi
     # Extract components
     state_dict = checkpoint['model']
     num_fidelities = len(train_cfg.data.fidelity_datasets)
-    fidelity_offset = train_cfg.get('fidelity_offset', 100)
+    fidelity_offset = train_cfg.get('fidelity_offset', 200)
     use_fidelity_readouts = train_cfg.get('use_fidelity_readouts', True)
 
     # Load SAE from file

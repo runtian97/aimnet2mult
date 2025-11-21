@@ -210,7 +210,7 @@ print(_out.keys())
 
 Train on datasets from different computational methods simultaneously:
 
-- **Atomic Number Offsetting**: Element Z becomes Z, Z+100, Z+200 for fidelities 0, 1, 2
+- **Atomic Number Offsetting**: Element Z becomes Z, Z+200, Z+400 for fidelities 0, 1, 2 (configurable via `fidelity_offset` in training config)
 - **Fidelity-Specific Layers**: Each fidelity has its own readout layers and embeddings
 - **Weighted Sampling**: Control how often each fidelity is sampled during training
 

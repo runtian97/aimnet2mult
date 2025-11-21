@@ -133,7 +133,7 @@ def get_masses(device="cpu"):
             293.204,
             293.208,
             294.214,
-        ]
+        ] + [0.0] * 9  # Extend to 128 elements with placeholder values
     )
     return atomic_masses.to(device)
 
@@ -229,7 +229,7 @@ def get_gfn1_rep(device="cpu"):
             1.013118,
             0.964652,
             0.998641,
-        ]
+        ] + [1.0] * 42  # Extend to 128 elements with placeholder values
     )
     # Zeff
     gfn1_Zeff = torch.tensor(
@@ -321,7 +321,7 @@ def get_gfn1_rep(device="cpu"):
             84.000000,
             85.000000,
             86.000000,
-        ]
+        ] + [0.0] * 42  # Extend to 128 elements with placeholder values
     )
     gfn1_repa = gfn1_alpha.pow(0.5) * Bohr_inv**0.75
     gfn1_repb = gfn1_Zeff * (0.5 * Hartree * Bohr) ** 0.5
@@ -451,7 +451,7 @@ def get_r4r2(device="cpu"):
         10.3600,
         9.4723,
         8.6641,
-    ]
+    ] + [0.0] * 15  # Extend to 128 elements with placeholder values
 
     r4r2 = (
         0.5

@@ -25,7 +25,7 @@ class MixedFidelityDataset(MultiFidelityDataset):
         self,
         fidelity_datasets: Dict[int, SizeGroupedDataset],
         fidelity_weights: Dict[int, float] | None = None,
-        fidelity_offset: int = 100,
+        fidelity_offset: int = 200,
     ) -> None:
         super().__init__(fidelity_datasets, fidelity_weights)
         self.fidelity_offset = fidelity_offset

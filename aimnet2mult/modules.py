@@ -98,7 +98,7 @@ class DSequential(nn.Module):
 
 
 class AtomicShift(nn.Module):
-    def __init__(self, key_in: str, key_out: str, num_types: int = 64,
+    def __init__(self, key_in: str, key_out: str, num_types: int = 128,
                  dtype: torch.dtype = torch.float, requires_grad: bool = True, reduce_sum=False):
         super().__init__()
         shifts = nn.Embedding(num_types, 1, padding_idx=0, dtype=dtype)
@@ -233,7 +233,7 @@ class SRRep(nn.Module):
         self.register_buffer('rc', torch.tensor(rc))
         gfn1_repa, gfn1_repb = get_gfn1_rep()
         weight = torch.stack([gfn1_repa, gfn1_repb], axis=-1)
-        self.params = nn.Embedding(87, 2, padding_idx=0, _weight=weight)
+        self.params = nn.Embedding(128, 2, padding_idx=0, _weight=weight)
         self.params.weight.requires_grad_(False)
 
     def forward(self, data: Dict[str, Tensor]) -> Dict[str, Tensor]:
@@ -399,7 +399,7 @@ class DispParam(nn.Module):
         if ptfile is not None:
             ref = torch.load(ptfile)
         else:
-            ref = torch.zeros(87, 2)
+            ref = torch.zeros(128, 2)
         for i, p in enumerate([ref_c6, ref_alpha]):
             if p is not None:
                 if isinstance(p, Tensor):
@@ -479,10 +479,10 @@ class DFTD3(nn.Module):
         self.k1 = - 16.0
         self.k3 = -4.0
         # data
-        self.register_buffer('c6ab', torch.zeros(95, 95, 5, 5, 3))
-        self.register_buffer('r4r2', torch.zeros(95))
-        self.register_buffer('rcov', torch.zeros(95))
-        self.register_buffer('cnmax', torch.zeros(95))
+        self.register_buffer('c6ab', torch.zeros(128, 128, 5, 5, 3))
+        self.register_buffer('r4r2', torch.zeros(128))
+        self.register_buffer('rcov', torch.zeros(128))
+        self.register_buffer('cnmax', torch.zeros(128))
         if datafile is None:
             datafile = os.path.join(os.path.dirname(__file__), 'd3bj_data.pt')    
         sd = torch.load(datafile)

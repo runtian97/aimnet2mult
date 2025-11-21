@@ -6,7 +6,7 @@
 run_name: mismatched_example
 
 # Fidelity settings
-fidelity_offset: 100
+fidelity_offset: 200
 use_fidelity_readouts: true  # Use fidelity-dependent readouts
 
 data:

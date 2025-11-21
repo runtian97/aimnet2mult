@@ -1,6 +1,6 @@
 class: aimnet2mult.models.aimnet2.AIMNet2
 kwargs:
-  nfeature: 16
+  nfeature: 128
   d2features: true
   ncomb_v: 12
   hidden: [[512, 380], [512, 380], [512, 380, 380]]
@@ -8,7 +8,7 @@ kwargs:
   num_charge_channels: 2  # Enable NSE for spin-polarized calculations
   aev:
     rc_s: 5.0
-    nshifts_s: 16
+    nshifts_s: 32
   outputs:
     energy_mlp:
       class: aimnet2mult.modules.Output

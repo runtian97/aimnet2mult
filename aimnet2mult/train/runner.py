@@ -56,7 +56,7 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
     model = MixedFidelityAIMNet2(
         base_model_config=OmegaConf.to_container(model_cfg, resolve=True),
         num_fidelities=len(train_cfg.data.fidelity_datasets),
-        fidelity_offset=train_cfg.get("fidelity_offset", 100),
+        fidelity_offset=train_cfg.get("fidelity_offset", 200),
         use_fidelity_readouts=train_cfg.get("use_fidelity_readouts", True),
     )
     if _force_training:
