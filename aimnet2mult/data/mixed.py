@@ -26,10 +26,13 @@ class MixedFidelityDataset(MultiFidelityDataset):
         fidelity_datasets: Dict[int, SizeGroupedDataset],
         fidelity_weights: Dict[int, float] | None = None,
         fidelity_offset: int = 200,
+        _skip_offset_application: bool = False,
     ) -> None:
         super().__init__(fidelity_datasets, fidelity_weights)
         self.fidelity_offset = fidelity_offset
-        self._apply_atomic_number_offsets()
+
+        if not _skip_offset_application:
+            self._apply_atomic_number_offsets()
 
         logging.info("Initialized MixedFidelityDataset with offset=%d", fidelity_offset)
         for fid in self.fidelity_levels:
@@ -63,6 +66,27 @@ class MixedFidelityDataset(MultiFidelityDataset):
                 return x, y, fid
             cumulative += fid_len
         raise IndexError(f"Index {index} out of range for dataset of size {len(self)}")
+
+    def random_split(self, *fractions: float, seed: int | None = None) -> List["MixedFidelityDataset"]:
+        """Override random_split to preserve fidelity_offset and skip re-applying offsets."""
+        splits = [
+            self.datasets[fid].random_split(*fractions, seed=seed) for fid in self.fidelity_levels
+        ]
+
+        result: List[MixedFidelityDataset] = []
+        for split_index in range(len(fractions)):
+            fid_datasets = {
+                fid: splits[idx][split_index] for idx, fid in enumerate(self.fidelity_levels)
+            }
+            result.append(
+                MixedFidelityDataset(
+                    fid_datasets,
+                    fidelity_weights=self.fidelity_weights,
+                    fidelity_offset=self.fidelity_offset,
+                    _skip_offset_application=True,  # Offsets already applied
+                )
+            )
+        return result
 
     def get_loader_batch(self, indices: List[Tuple[int, str, int]]):
         batch = []

@@ -10,7 +10,7 @@ from .base import AIMNet2Base
 class AIMNet2(AIMNet2Base):
     def __init__(self, aev: Dict, nfeature: int, d2features: bool, ncomb_v: int, hidden: Tuple[List[int]],
                  aim_size: int, outputs: Union[List[nn.Module], Dict[str, nn.Module]],
-                 num_charge_channels: int = 1):
+                 num_charge_channels: int = 1, max_z: int = 128):
         super().__init__()
 
         assert num_charge_channels in [1, 2], "num_charge_channels must be 1 (closed shell) or 2 (NSE for open-shell)."
@@ -27,13 +27,14 @@ class AIMNet2(AIMNet2Base):
         self.nfeature = nfeature
         self.nshifts_s = nshifts_s
         self.d2features = d2features
+        self.max_z = max_z
 
-        self.afv = Embedding(num_embeddings=128, embedding_dim=nfeature, padding_idx=0)
+        self.afv = Embedding(num_embeddings=max_z, embedding_dim=nfeature, padding_idx=0)
 
         with torch.no_grad():
             nn.init.orthogonal_(self.afv.weight[1:])
             if d2features:
-                self.afv.weight = nn.Parameter(self.afv.weight.clone().unsqueeze(-1).expand(128, nfeature, nshifts_s).flatten(-2, -1))
+                self.afv.weight = nn.Parameter(self.afv.weight.clone().unsqueeze(-1).expand(max_z, nfeature, nshifts_s).flatten(-2, -1))
 
         conv_param = dict(nshifts_s=nshifts_s, nshifts_v=nshifts_v,
                           ncomb_v=ncomb_v, do_vector=True)

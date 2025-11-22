@@ -46,16 +46,17 @@ class MixedFidelityAIMNet2(AIMNet2):
         # Build base model using aimnet.config.build_module
         from ..config import build_module
 
-        # Build a temporary model to get the architecture
-        temp_model = build_module(base_model_config)
-
         # Extract parameters from config
         if isinstance(base_model_config, dict) and 'kwargs' in base_model_config:
             cfg = base_model_config['kwargs']
         else:
             cfg = base_model_config
 
-        # Initialize base model with config parameters
+        # Build outputs separately without building full model
+        outputs_cfg = cfg['outputs']
+        outputs = build_module(outputs_cfg)
+
+        # Initialize base model with config parameters, passing max_z
         super().__init__(
             aev=cfg['aev'],
             nfeature=cfg['nfeature'],
@@ -63,23 +64,10 @@ class MixedFidelityAIMNet2(AIMNet2):
             ncomb_v=cfg['ncomb_v'],
             hidden=cfg['hidden'],
             aim_size=cfg['aim_size'],
-            outputs=dict(temp_model.outputs),  # Convert ModuleDict to dict
-            num_charge_channels=cfg.get('num_charge_channels', 1)
+            outputs=outputs,
+            num_charge_channels=cfg.get('num_charge_channels', 1),
+            max_z=max_z_total + 1
         )
-
-        # Replace AFV embedding with larger table to accommodate all fidelities
-        old_afv_shape = self.afv.weight.shape
-        new_afv_size = max_z_total + 1
-        new_afv = nn.Embedding(new_afv_size, old_afv_shape[1], padding_idx=0)
-
-        # Copy over existing weights for base atomic numbers
-        with torch.no_grad():
-            # Initialize with small random values
-            nn.init.normal_(new_afv.weight, mean=0, std=0.01)
-            new_afv.weight[:old_afv_shape[0]] = self.afv.weight
-
-        self.afv = new_afv
-        self.max_z = max_z_total
 
         self.num_fidelities = num_fidelities
         self.fidelity_offset = fidelity_offset
@@ -105,9 +93,12 @@ class MixedFidelityAIMNet2(AIMNet2):
         max_z_total = self.num_fidelities * self.fidelity_offset + max_z_base
 
         for fid in range(self.num_fidelities):
-            # Build a new model to get fresh output layers for this fidelity
-            temp_model = build_module(config)
-            fid_outputs = temp_model.outputs
+            # Build outputs directly without building full model
+            if isinstance(config, dict) and 'kwargs' in config:
+                outputs_cfg = config['kwargs']['outputs']
+            else:
+                outputs_cfg = config['outputs']
+            fid_outputs = build_module(outputs_cfg)
 
             # Expand atomic shift modules to handle shifted atomic numbers
             for key, module in fid_outputs.items():
@@ -127,7 +118,8 @@ class MixedFidelityAIMNet2(AIMNet2):
 
                     module.shifts = new_shifts
 
-            self.fidelity_readouts[str(fid)] = fid_outputs
+            # Convert dict to ModuleDict before assigning
+            self.fidelity_readouts[str(fid)] = nn.ModuleDict(fid_outputs)
 
     def forward(
         self,
