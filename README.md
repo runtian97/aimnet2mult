@@ -214,6 +214,63 @@ Train on datasets from different computational methods simultaneously:
 - **Fidelity-Specific Layers**: Each fidelity has its own readout layers and embeddings
 - **Weighted Sampling**: Control how often each fidelity is sampled during training
 
+#### How Atomic Number Shifting Works
+
+The atomic number shifting mechanism differs across training, compilation, and inference to enable multi-fidelity learning while maintaining a clean user interface.
+
+**Example: Water molecule (O, H, H) in Fidelity 1 with offset=200**
+
+##### Training
+- **Data loading** shifts both atomic numbers and SAE keys by the fidelity offset
+- Model receives pre-shifted inputs and uses them directly
+
+```
+Input atomic numbers: [8, 1, 1] (original)
+  ↓ Shift +200 (data layer)
+Training data: [208, 201, 201] (shifted)
+  ↓
+Model embedding lookup: afv[208], afv[201], afv[201] ✓
+SAE keys: {201: -0.5, 208: -75.0} (also shifted +200)
+  ↓
+Direct SAE lookup for shifted numbers ✓
+```
+
+##### Compilation
+- **Extracts** fidelity-specific weights and **restores** AFV embeddings to standard indexing
+- **Shifts** SAE keys during storage
+
+```
+Trained model AFV [size 728]:
+  Rows 200-328 (fidelity 1 embeddings)
+    ↓ Extract and remap
+Compiled model AFV [size 128]:
+  Rows 0-128 (standard indexing)
+  afv[201] → afv[1], afv[208] → afv[8] ✓
+
+Original SAE: {1: -0.5, 8: -75.0}
+    ↓ Shift +200 during storage
+Compiled SAE storage: {201: -0.5, 208: -75.0} ✓
+```
+
+##### Inference
+- User provides **standard** atomic numbers
+- Base model uses standard indexing
+- SAE wrapper shifts numbers only for SAE lookup
+
+```
+User input: [8, 1, 1] (standard)
+  ↓
+Base model: afv[8], afv[1], afv[1] (standard lookup) ✓
+  ↓
+SAE wrapper: [8, 1, 1] + 200 = [208, 201, 201]
+  ↓
+SAE lookup: sae_tensor[208], sae_tensor[201] ✓
+  ↓
+Final energy = model_output + SAE_correction
+```
+
+**Key Insight**: The compiled model provides a standard interface (normal atomic numbers in/out) while internally using shifted SAE storage for consistency with the training procedure.
+
 ### Heterogeneous Labels
 
 Different datasets can have different available properties:
