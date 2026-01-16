@@ -140,7 +140,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     wandb_logger.attach_output_handler(
         trainer,
         event_name=Events.ITERATION_COMPLETED(every=200),
-        output_transform=lambda loss: {"loss": loss},
+        output_transform=lambda output: {"loss": trainer.state.loss},
         tag='train'
         )
 
@@ -149,17 +149,37 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     def log_validation_metrics(engine):
         if 'metrics' in engine.state.metrics:
             metrics_dict = engine.state.metrics['metrics']
-            # Flatten the nested metrics dictionary for wandb
+            # Flatten the nested metrics dictionary for wandb with 'val/' prefix
             flat_metrics = {}
             if isinstance(metrics_dict, dict):
                 for key, value in metrics_dict.items():
+                    # Convert tensor to scalar if needed
+                    if hasattr(value, 'item'):
+                        value = value.item()
                     if isinstance(value, (int, float)):
-                        flat_metrics[key] = value
+                        flat_metrics[f'val/{key}'] = value
             if flat_metrics:
-                wandb_logger.log(flat_metrics, step=trainer.state.iteration, sync=False)
+                wandb.log(flat_metrics, step=trainer.state.iteration)
 
     validator.add_event_handler(Events.EPOCH_COMPLETED, log_validation_metrics)
-    
+
+    # Log training metrics at end of each epoch (if metrics are enabled)
+    def log_training_metrics(engine):
+        if 'metrics' in engine.state.metrics:
+            metrics_dict = engine.state.metrics['metrics']
+            flat_metrics = {}
+            if isinstance(metrics_dict, dict):
+                for key, value in metrics_dict.items():
+                    # Convert tensor to scalar if needed
+                    if hasattr(value, 'item'):
+                        value = value.item()
+                    if isinstance(value, (int, float)):
+                        flat_metrics[f'train_epoch/{key}'] = value
+            if flat_metrics:
+                wandb.log(flat_metrics, step=trainer.state.iteration)
+
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, log_training_metrics)
+
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):
             global_step = engine.state.iteration

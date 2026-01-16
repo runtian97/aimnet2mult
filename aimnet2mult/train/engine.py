@@ -36,6 +36,9 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
         total_loss.backward()
         optimizer.step()
 
+        # Store loss separately for WandB logging
+        engine.state.loss = total_loss.item()
+
         # Return pred and y for metrics computation
         return pred, y
 
