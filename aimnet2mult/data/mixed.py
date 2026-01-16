@@ -51,8 +51,9 @@ class MixedFidelityDataset(MultiFidelityDataset):
                     continue
                 original_numbers = group["numbers"]
                 mask = original_numbers > 0
-                shifted = original_numbers.copy()
-                shifted[mask] = original_numbers[mask] + offset
+                # Convert to int32 to prevent overflow when adding offset
+                shifted = original_numbers.astype('int32')
+                shifted[mask] = original_numbers[mask].astype('int32') + offset
                 group["numbers"] = shifted
 
     def __getitem__(self, index: int):

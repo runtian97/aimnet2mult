@@ -25,7 +25,7 @@ data:
       mode: linreg
 
   # Validation settings
-  val_fraction: 0.1
+  val_fraction: 0.01  # Use 1% for validation (faster for large datasets)
   separate_val: true
   ddp_load_full_dataset: false
 
@@ -48,7 +48,7 @@ data:
         batch_size: 64
         batch_mode: atoms
         shuffle: false
-        batches_per_epoch: -1
+        batches_per_epoch: 100  # Limit validation batches for speed (was -1 for all data)
         sampling_strategy: uniform
 
   # DataLoader settings
