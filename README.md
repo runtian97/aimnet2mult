@@ -13,7 +13,7 @@ A PyTorch implementation of AIMNet2 with **mixed-fidelity training** support. Tr
 ## Installation
 
 ```bash
-git clone https://github.com/your-repo/aimnet2mult.git
+git clone https://github.com/runtian97/aimnet2mult.git
 cd aimnet2mult
 pip install .
 ```
