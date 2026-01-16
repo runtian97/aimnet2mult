@@ -62,10 +62,13 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
     if _force_training:
         model = Forces(model)
 
-    device = torch.device("cpu")
-    model = model.to(device)
     if torch.cuda.device_count() > 0:
+        device = torch.device("cuda")
+        model = model.to(device)
         model = idist.auto_model(model)
+    else:
+        device = torch.device("cpu")
+        model = model.to(device)
 
     if load_path is not None:
         logging.info("Loading pretrained weights from %s", load_path)
