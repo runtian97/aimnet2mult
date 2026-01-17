@@ -290,7 +290,16 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
 
             trainer.add_event_handler(Events.EPOCH_COMPLETED, log_train_metrics)
 
-    trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), validator.run, data=val_loader)
+    # Run validation - configurable frequency
+    val_frequency = train_cfg.get("val_frequency", None)
+    if val_frequency and val_frequency.get("mode") == "iterations":
+        # High-frequency validation: run every N iterations for smooth curves
+        val_every = val_frequency.get("every", 1000)
+        logging.info("Validation will run every %d iterations", val_every)
+        trainer.add_event_handler(Events.ITERATION_COMPLETED(every=val_every), validator.run, data=val_loader)
+    else:
+        # Default: run validation once per epoch
+        trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), validator.run, data=val_loader)
 
     # Attach scheduler if configured
     if scheduler is not None:
