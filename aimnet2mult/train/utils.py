@@ -137,12 +137,34 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
+    # Log training loss every 200 iterations
     wandb_logger.attach_output_handler(
         trainer,
         event_name=Events.ITERATION_COMPLETED(every=200),
         output_transform=lambda output: {"loss": trainer.state.loss},
         tag='train'
         )
+
+    # Log batch-level RMSE every 200 iterations for high-frequency monitoring
+    def log_batch_rmse(engine):
+        if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
+            # Apply unit conversions (eV to kcal/mol)
+            metrics = {}
+            ev_to_kcal = 23.06
+
+            if 'energy' in engine.state.batch_rmse:
+                metrics['train/E_rmse'] = engine.state.batch_rmse['energy'] * ev_to_kcal
+            if 'forces' in engine.state.batch_rmse:
+                metrics['train/F_rmse'] = engine.state.batch_rmse['forces'] * ev_to_kcal
+            if 'charges' in engine.state.batch_rmse:
+                metrics['train/q_rmse'] = engine.state.batch_rmse['charges']
+            if 'spin_charges' in engine.state.batch_rmse:
+                metrics['train/s_rmse'] = engine.state.batch_rmse['spin_charges']
+
+            if metrics:
+                wandb.log(metrics, step=trainer.state.iteration)
+
+    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=200), log_batch_rmse)
 
     # Log validation metrics - they are stored under engine.state.metrics['metrics']
     # We need to extract and flatten them for wandb logging

@@ -39,10 +39,44 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
         # Store loss separately for WandB logging
         engine.state.loss = total_loss.item()
 
+        # Compute batch-level RMSE for high-frequency logging
+        engine.state.batch_rmse = _compute_batch_rmse(pred, y)
+
         # Return pred and y for metrics computation
         return pred, y
 
     return Engine(_update)
+
+
+def _compute_batch_rmse(pred: Dict, y_true: Dict) -> Dict:
+    """Compute RMSE for each property on a single batch."""
+    rmse = {}
+    with torch.no_grad():
+        for key in ['energy', 'forces', 'charges', 'spin_charges']:
+            if key not in pred or key not in y_true:
+                continue
+
+            # Check for mask (mixed-fidelity training)
+            mask_key = f"{key}_mask"
+            mask = y_true.get(mask_key, None)
+
+            error = (pred[key] - y_true[key]).pow(2)
+
+            if mask is not None:
+                # Apply mask
+                while mask.dim() < error.dim():
+                    mask = mask.unsqueeze(-1)
+                error = error * mask
+                n_valid = mask.sum().item()
+                if n_valid == 0:
+                    continue
+                mse = error.sum().item() / n_valid
+            else:
+                mse = error.mean().item()
+
+            rmse[key] = mse ** 0.5
+
+    return rmse
 
 
 def create_evaluator(model: nn.Module, device):
