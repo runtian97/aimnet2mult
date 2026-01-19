@@ -109,10 +109,9 @@ trainer:
   epochs: 200
 
 # Logging frequency (iterations)
-# - train: log training loss every N iterations (default: 200)
-# - val: ignored, validation runs once per epoch (like aimnet2)
 log_frequency:
-  train: 200
+  train: 10           # Log train loss + RMSE every 10 iterations
+  val: 10             # Run validation every 10 iterations
 
 # Checkpointing
 checkpoint:

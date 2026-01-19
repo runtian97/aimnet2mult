@@ -125,7 +125,6 @@ def prepare_batch(batch: Dict[str, Tensor], device='cuda', non_blocking=True) ->
     return batch
 
 
-# Exactly like aimnet2's setup_wandb
 def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     import wandb
     from ignite.handlers import WandBLogger, global_step_from_engine
@@ -138,11 +137,11 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
-    # Get logging frequency from config (default: 200 like aimnet2)
+    # Get logging frequency from config
     log_frequency = cfg.get("log_frequency", {})
-    train_log_every = log_frequency.get("train", 200)
+    train_log_every = log_frequency.get("train", 10)
 
-    # Log training loss (same as aimnet2)
+    # Log training loss
     wandb_logger.attach_output_handler(
         trainer,
         event_name=Events.ITERATION_COMPLETED(every=train_log_every),
@@ -150,7 +149,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         tag='train'
         )
 
-    # Log validation metrics (same as aimnet2)
+    # Log validation metrics
     wandb_logger.attach_output_handler(
         validator,
         event_name=Events.EPOCH_COMPLETED,
@@ -158,6 +157,26 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         metric_names="all",
         tag='val'
         )
+
+    # Log batch-level train RMSE (energy, forces, charges, spin_charges)
+    def log_batch_rmse(engine):
+        if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
+            metrics = {}
+            ev_to_kcal = 23.06
+
+            if 'energy' in engine.state.batch_rmse:
+                metrics['train/E_rmse'] = engine.state.batch_rmse['energy'] * ev_to_kcal
+            if 'forces' in engine.state.batch_rmse:
+                metrics['train/F_rmse'] = engine.state.batch_rmse['forces'] * ev_to_kcal
+            if 'charges' in engine.state.batch_rmse:
+                metrics['train/q_rmse'] = engine.state.batch_rmse['charges']
+            if 'spin_charges' in engine.state.batch_rmse:
+                metrics['train/s_rmse'] = engine.state.batch_rmse['spin_charges']
+
+            if metrics:
+                wandb.log(metrics, step=trainer.state.iteration)
+
+    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=train_log_every), log_batch_rmse)
 
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):
