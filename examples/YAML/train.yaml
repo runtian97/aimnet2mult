@@ -62,26 +62,26 @@ data:
 
 # Loss function
 loss:
-  class: aimnet.train.loss.MTLoss
+  class: aimnet2mult.train.loss.MTLoss
   kwargs:
     components:
       energy:
-        fn: aimnet.train.loss.energy_loss_fn
+        fn: aimnet2mult.train.loss.energy_loss_fn
         weight: 1.0
       forces:
-        fn: aimnet.train.loss.peratom_loss_fn
+        fn: aimnet2mult.train.loss.peratom_loss_fn
         weight: 0.2
         kwargs:
           key_true: forces
           key_pred: forces
       charges:
-        fn: aimnet.train.loss.peratom_loss_fn
+        fn: aimnet2mult.train.loss.peratom_loss_fn
         weight: 0.05
         kwargs:
           key_true: charges
           key_pred: charges
       spin_charges:
-        fn: aimnet.train.loss.peratom_loss_fn
+        fn: aimnet2mult.train.loss.peratom_loss_fn
         weight: 0.05
         kwargs:
           key_true: spin_charges
@@ -127,6 +127,11 @@ scheduler:
 # Training
 trainer:
   epochs: 10
+
+# Validation frequency - for smooth plots
+val_frequency:
+  mode: iterations
+  every: 10
 
 # Checkpointing
 checkpoint:
