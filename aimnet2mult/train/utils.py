@@ -149,14 +149,18 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         tag='train'
         )
 
-    # Log validation metrics
-    wandb_logger.attach_output_handler(
-        validator,
-        event_name=Events.EPOCH_COMPLETED,
-        global_step_transform=lambda *_: trainer.state.iteration,
-        metric_names="all",
-        tag='val'
-        )
+    # Log validation metrics (filter out non-numeric values like nested dicts)
+    def log_val_metrics(engine):
+        metrics = engine.state.metrics
+        if metrics:
+            val_metrics = {}
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    val_metrics[f'val/{key}'] = value
+            if val_metrics:
+                wandb.log(val_metrics, step=trainer.state.iteration)
+
+    validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
 
     # Log batch-level train RMSE (energy, forces, charges, spin_charges)
     def log_batch_rmse(engine):
