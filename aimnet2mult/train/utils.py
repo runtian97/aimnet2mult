@@ -150,15 +150,19 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         tag='train'
         )
 
-    # Log validation metrics using ignite's built-in handler
-    # This logs all metrics: E_rmse, E_mae, F_rmse, F_mae, q_rmse, s_rmse, etc.
-    wandb_logger.attach_output_handler(
-        validator,
-        event_name=Events.EPOCH_COMPLETED,
-        global_step_transform=lambda *_: trainer.state.iteration,
-        metric_names="all",
-        tag='val'
-        )
+    # Log validation metrics explicitly (more reliable than built-in handler)
+    def log_val_metrics(engine):
+        metrics = engine.state.metrics
+        if metrics:
+            val_metrics = {}
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    val_metrics[f'val/{key}'] = value
+            if val_metrics:
+                wandb.log(val_metrics, step=trainer.state.iteration)
+                logging.info(f"Logged {len(val_metrics)} validation metrics to wandb")
+
+    validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
 
     # Log batch-level RMSE for high-frequency monitoring
     # (energy, forces, charges, spin_charges in kcal/mol)
@@ -196,7 +200,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         event_name=Events.EPOCH_STARTED
         )
     
-    score_function = lambda engine: 1.0 / engine.state.metrics['loss']
+    score_function = lambda engine: -engine.state.metrics.get('loss', float('inf'))
     model_checkpoint = ModelCheckpoint(
             wandb.run.dir, n_saved=1, filename_prefix='best',
             require_empty=False, score_function=score_function,
