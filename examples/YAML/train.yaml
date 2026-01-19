@@ -1,7 +1,4 @@
 # AIMNet2 Multi-Fidelity Training Configuration
-#
-# Configure fidelity_datasets, fidelity_weights, and sae.energy.files
-# via command line or by editing this file directly.
 
 run_name: ???
 project_name: ???
@@ -11,30 +8,22 @@ fidelity_offset: 200
 use_fidelity_readouts: true
 
 data:
-  # Fidelity datasets (specify paths or override via command line)
   fidelity_datasets: {}
-
-  # Fidelity weights (higher weight = more samples from that fidelity)
   fidelity_weights: {}
-
   val_fidelity_datasets: null
 
-  # SAE files (one per fidelity)
   sae:
     energy:
       files: {}
       mode: linreg
 
-  # Validation settings
   val_fraction: 0.005
   separate_val: true
   ddp_load_full_dataset: false
 
-  # Input and output keys
   x: [coord, numbers, charge, mult]
   y: [energy, forces, charges, spin_charges]
 
-  # Sampler configuration
   samplers:
     train:
       kwargs:
@@ -52,7 +41,6 @@ data:
         batches_per_epoch: 1000
         sampling_strategy: uniform
 
-  # DataLoader settings
   loaders:
     train:
       num_workers: 4
@@ -61,7 +49,7 @@ data:
       num_workers: 2
       pin_memory: true
 
-# Loss function - energy-focused
+# Loss function
 loss:
   class: aimnet2mult.train.loss.MTLoss
   kwargs:
@@ -88,7 +76,7 @@ loss:
           key_true: spin_charges
           key_pred: spin_charges
 
-# Optimizer - AdamW
+# Optimizer
 optimizer:
   force_no_train: []
   force_train: []
@@ -107,7 +95,7 @@ optimizer:
       re: '.*.atomic_shift.shifts.weight$'
       weight_decay: 0.0
 
-# Learning rate scheduler - ReduceLROnPlateau (adaptive)
+# Learning rate scheduler
 scheduler:
   class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
   kwargs:
@@ -121,20 +109,21 @@ trainer:
   epochs: 200
 
 # Logging frequency (iterations)
+# - train: log training loss every N iterations (default: 200)
+# - val: ignored, validation runs once per epoch (like aimnet2)
 log_frequency:
-  train: 10
-  val: 10
+  train: 200
 
 # Checkpointing
 checkpoint:
   dirname: checkpoints
   filename_prefix: ${run_name}
-  save_best: true             # Save best models by validation loss (not most recent)
+  save_best: true
   kwargs:
     n_saved: 10
     require_empty: false
 
-# Weights & Biases logger
+# Weights & Biases
 wandb:
   init:
     name: ${run_name}
