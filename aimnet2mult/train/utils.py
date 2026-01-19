@@ -16,14 +16,14 @@ from ..modules import Forces
 
 
 def load_dataset(cfg: omegaconf.DictConfig, kind='train'):
-    # only load required subset of keys  
+    # only load required subset of keys
     keys = list(cfg.x) + list(cfg.y)
     # in DDP setting, will only load 1/WORLD_SIZE of the data
     if idist.get_world_size() > 1 and not cfg.ddp_load_full_dataset:
         shard = (idist.get_local_rank(), idist.get_world_size())
     else:
         shard = None
-    
+
     extra_kwargs = {
             'keys': keys,
             'shard': shard,
@@ -125,6 +125,7 @@ def prepare_batch(batch: Dict[str, Tensor], device='cuda', non_blocking=True) ->
     return batch
 
 
+# Exactly like aimnet2's setup_wandb
 def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     import wandb
     from ignite.handlers import WandBLogger, global_step_from_engine
@@ -137,68 +138,26 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
-    # Get logging frequency from config (default: 10 iterations)
+    # Get logging frequency from config (default: 200 like aimnet2)
     log_frequency = cfg.get("log_frequency", {})
-    train_log_every = log_frequency.get("train", 10)
-    logging.info(f"Training metrics will be logged every {train_log_every} iterations")
+    train_log_every = log_frequency.get("train", 200)
 
-    # Log training loss
+    # Log training loss (same as aimnet2)
     wandb_logger.attach_output_handler(
         trainer,
         event_name=Events.ITERATION_COMPLETED(every=train_log_every),
-        output_transform=lambda output: {"loss": trainer.state.loss},
+        output_transform=lambda loss: {"loss": trainer.state.loss},
         tag='train'
         )
 
-    # Log validation metrics explicitly (more reliable than built-in handler)
-    def log_val_metrics(engine):
-        logging.info(f"[VAL] log_val_metrics called at step {trainer.state.iteration}")
-        metrics = engine.state.metrics
-        logging.info(f"[VAL] metrics keys: {list(metrics.keys()) if metrics else 'EMPTY'}")
-
-        if metrics:
-            val_metrics = {}
-            for key, value in metrics.items():
-                # Handle various numeric types (float, int, numpy, tensor)
-                try:
-                    if hasattr(value, 'item'):  # tensor or numpy
-                        val_metrics[f'val/{key}'] = float(value.item())
-                    elif isinstance(value, (int, float)):
-                        val_metrics[f'val/{key}'] = float(value)
-                except Exception as e:
-                    logging.warning(f"[VAL] Could not convert {key}: {type(value)} - {e}")
-
-            if val_metrics:
-                wandb.log(val_metrics, step=trainer.state.iteration)
-                logging.info(f"[VAL] Logged {len(val_metrics)} validation metrics to wandb")
-            else:
-                logging.warning("[VAL] No valid metrics to log!")
-        else:
-            logging.warning("[VAL] metrics is empty!")
-
-    validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
-    validator.add_event_handler(Events.COMPLETED, log_val_metrics)  # Backup event
-
-    # Log batch-level RMSE for high-frequency monitoring
-    # (energy, forces, charges, spin_charges in kcal/mol)
-    def log_batch_rmse(engine):
-        if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
-            metrics = {}
-            ev_to_kcal = 23.06
-
-            if 'energy' in engine.state.batch_rmse:
-                metrics['train/E_rmse'] = engine.state.batch_rmse['energy'] * ev_to_kcal
-            if 'forces' in engine.state.batch_rmse:
-                metrics['train/F_rmse'] = engine.state.batch_rmse['forces'] * ev_to_kcal
-            if 'charges' in engine.state.batch_rmse:
-                metrics['train/q_rmse'] = engine.state.batch_rmse['charges']
-            if 'spin_charges' in engine.state.batch_rmse:
-                metrics['train/s_rmse'] = engine.state.batch_rmse['spin_charges']
-
-            if metrics:
-                wandb.log(metrics, step=trainer.state.iteration)
-
-    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=train_log_every), log_batch_rmse)
+    # Log validation metrics (same as aimnet2)
+    wandb_logger.attach_output_handler(
+        validator,
+        event_name=Events.EPOCH_COMPLETED,
+        global_step_transform=lambda *_: trainer.state.iteration,
+        metric_names="all",
+        tag='val'
+        )
 
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):
@@ -214,8 +173,8 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         log_handler=EpochLRLogger(optimizer),
         event_name=Events.EPOCH_STARTED
         )
-    
-    score_function = lambda engine: -engine.state.metrics.get('loss', float('inf'))
+
+    score_function = lambda engine: 1.0 / engine.state.metrics.get('loss', float('inf'))
     model_checkpoint = ModelCheckpoint(
             wandb.run.dir, n_saved=1, filename_prefix='best',
             require_empty=False, score_function=score_function,

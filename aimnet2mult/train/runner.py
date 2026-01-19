@@ -226,10 +226,10 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
             # Get kwargs
             kwargs = OmegaConf.to_container(metrics_cfg.get("kwargs", {}))
 
-            # Instantiate metrics for validator
+            # Instantiate metrics for validator (same as aimnet2: attach with name 'multi')
             val_metric = metric_class(**kwargs)
             val_metric.attach_loss(loss_fn)
-            val_metric.attach(validator, "metrics")
+            val_metric.attach(validator, 'multi')
 
             # Instantiate separate metrics for trainer
             train_metric = metric_class(**kwargs)
