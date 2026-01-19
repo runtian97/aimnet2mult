@@ -152,17 +152,32 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
 
     # Log validation metrics explicitly (more reliable than built-in handler)
     def log_val_metrics(engine):
+        logging.info(f"[VAL] log_val_metrics called at step {trainer.state.iteration}")
         metrics = engine.state.metrics
+        logging.info(f"[VAL] metrics keys: {list(metrics.keys()) if metrics else 'EMPTY'}")
+
         if metrics:
             val_metrics = {}
             for key, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    val_metrics[f'val/{key}'] = value
+                # Handle various numeric types (float, int, numpy, tensor)
+                try:
+                    if hasattr(value, 'item'):  # tensor or numpy
+                        val_metrics[f'val/{key}'] = float(value.item())
+                    elif isinstance(value, (int, float)):
+                        val_metrics[f'val/{key}'] = float(value)
+                except Exception as e:
+                    logging.warning(f"[VAL] Could not convert {key}: {type(value)} - {e}")
+
             if val_metrics:
                 wandb.log(val_metrics, step=trainer.state.iteration)
-                logging.info(f"Logged {len(val_metrics)} validation metrics to wandb")
+                logging.info(f"[VAL] Logged {len(val_metrics)} validation metrics to wandb")
+            else:
+                logging.warning("[VAL] No valid metrics to log!")
+        else:
+            logging.warning("[VAL] metrics is empty!")
 
     validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
+    validator.add_event_handler(Events.COMPLETED, log_val_metrics)  # Backup event
 
     # Log batch-level RMSE for high-frequency monitoring
     # (energy, forces, charges, spin_charges in kcal/mol)
