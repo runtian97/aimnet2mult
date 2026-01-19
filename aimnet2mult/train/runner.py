@@ -236,19 +236,23 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
             train_metric.attach_loss(loss_fn)
             train_metric.attach(trainer, "metrics")
 
-            # Log validation metrics after validation (RegMultiMetric handles formatting)
+            # Log validation metrics after validation
+            # Note: ignite merges dict returns from compute() directly into state.metrics
             def log_val_metrics(engine):
-                metrics_dict = engine.state.metrics.get("metrics", {})
+                metrics_dict = engine.state.metrics
                 if metrics_dict:
-                    logging.info("Validation Metrics - Epoch %d:\n%s", trainer.state.epoch, str(metrics_dict))
+                    # Filter out internal keys and format nicely
+                    filtered = {k: v for k, v in metrics_dict.items() if not k.startswith('_')}
+                    logging.info("Validation Metrics - Epoch %d:\n%s", trainer.state.epoch, str(filtered))
 
             validator.add_event_handler(Events.COMPLETED, log_val_metrics)
 
             # Log training metrics after each epoch
             def log_train_metrics(engine):
-                metrics_dict = engine.state.metrics.get("metrics", {})
+                metrics_dict = engine.state.metrics
                 if metrics_dict:
-                    logging.info("Training Metrics - Epoch %d:\n%s", engine.state.epoch, str(metrics_dict))
+                    filtered = {k: v for k, v in metrics_dict.items() if not k.startswith('_')}
+                    logging.info("Training Metrics - Epoch %d:\n%s", engine.state.epoch, str(filtered))
 
             trainer.add_event_handler(Events.EPOCH_COMPLETED, log_train_metrics)
 

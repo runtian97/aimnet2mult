@@ -137,18 +137,28 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
-    # Log training loss every 200 iterations
+    # Log training loss every 10 iterations
     wandb_logger.attach_output_handler(
         trainer,
-        event_name=Events.ITERATION_COMPLETED(every=200),
+        event_name=Events.ITERATION_COMPLETED(every=10),
         output_transform=lambda output: {"loss": trainer.state.loss},
         tag='train'
         )
 
+    # Log validation metrics using ignite's built-in handler (same as aimnet2)
+    # This logs all metrics: E_rmse, E_mae, F_rmse, F_mae, q_rmse, s_rmse, etc.
+    wandb_logger.attach_output_handler(
+        validator,
+        event_name=Events.EPOCH_COMPLETED,
+        global_step_transform=lambda *_: trainer.state.iteration,
+        metric_names="all",
+        tag='val'
+        )
+
     # Log batch-level RMSE every 200 iterations for high-frequency monitoring
+    # (energy, forces, charges, spin_charges in kcal/mol)
     def log_batch_rmse(engine):
         if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
-            # Apply unit conversions (eV to kcal/mol)
             metrics = {}
             ev_to_kcal = 23.06
 
@@ -164,43 +174,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
             if metrics:
                 wandb.log(metrics, step=trainer.state.iteration)
 
-    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=200), log_batch_rmse)
-
-    # Log validation metrics - they are stored under engine.state.metrics['metrics']
-    # We need to extract and flatten them for wandb logging
-    def log_validation_metrics(engine):
-        if 'metrics' in engine.state.metrics:
-            metrics_dict = engine.state.metrics['metrics']
-            # Flatten the nested metrics dictionary for wandb with 'val/' prefix
-            flat_metrics = {}
-            if isinstance(metrics_dict, dict):
-                for key, value in metrics_dict.items():
-                    # Convert tensor to scalar if needed
-                    if hasattr(value, 'item'):
-                        value = value.item()
-                    if isinstance(value, (int, float)):
-                        flat_metrics[f'val/{key}'] = value
-            if flat_metrics:
-                wandb.log(flat_metrics, step=trainer.state.iteration)
-
-    validator.add_event_handler(Events.EPOCH_COMPLETED, log_validation_metrics)
-
-    # Log training metrics at end of each epoch (if metrics are enabled)
-    def log_training_metrics(engine):
-        if 'metrics' in engine.state.metrics:
-            metrics_dict = engine.state.metrics['metrics']
-            flat_metrics = {}
-            if isinstance(metrics_dict, dict):
-                for key, value in metrics_dict.items():
-                    # Convert tensor to scalar if needed
-                    if hasattr(value, 'item'):
-                        value = value.item()
-                    if isinstance(value, (int, float)):
-                        flat_metrics[f'train_epoch/{key}'] = value
-            if flat_metrics:
-                wandb.log(flat_metrics, step=trainer.state.iteration)
-
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, log_training_metrics)
+    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=10), log_batch_rmse)
 
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):

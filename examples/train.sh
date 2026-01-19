@@ -1,20 +1,20 @@
 #!/bin/bash
 
 # Wandb configuration
-RUN_NAME="mixed_fidelity_experiment_001"
-PROJECT_NAME="aimnet2_mixed_fidelity"
+RUN_NAME="aimnet2_mf_v5_sgd"
+PROJECT_NAME="aimnet2_training"
 
-# Configuration paths
-CONFIG_FILE="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/YAML/train.yaml"
+# Configuration paths - use V5 SGD to escape local minimum
+CONFIG_FILE="/Users/nickgao/Desktop/pythonProject/aimnet2mult_train/train_v5_sgd.yaml"
 MODEL_FILE="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/YAML/model.yaml"
-FIDELITY_0_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity0.h5"
-FIDELITY_1_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity1.h5"
-FIDELITY_2_DATASET="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset/fidelity2.h5"
-FIDELITY_0_WEIGHT=4.0
-FIDELITY_1_WEIGHT=2.0
-FIDELITY_2_WEIGHT=1.0
-SAE_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/fake_dataset"
-OUTPUT_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run"
+FIDELITY_0_DATASET="/Users/nickgao/Desktop/pythonProject/AIMNet2_NSE_train/aimnet2_nse_cleaned.h5"
+FIDELITY_1_DATASET="/Users/nickgao/Desktop/pythonProject/AIMNet2_NSE_train/ani1ccx_clean_ev.h5"
+FIDELITY_2_DATASET="/Users/nickgao/Desktop/pythonProject/AIMNet2_NSE_train/omol_25_4M_cleaned.h5"
+FIDELITY_0_WEIGHT=1.0
+FIDELITY_1_WEIGHT=1.0
+FIDELITY_2_WEIGHT=0.5
+SAE_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult_train"
+OUTPUT_DIR="/Users/nickgao/Desktop/pythonProject/aimnet2mult_train/output"
 SAVE_PATH="${OUTPUT_DIR}/model.pt"
 OUTPUT_PREFIX="${OUTPUT_DIR}/model"
 NUM_FIDELITIES=3

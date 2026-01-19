@@ -34,6 +34,8 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
             raise ValueError("Loss function returned a dict without 'loss' key.")
 
         total_loss.backward()
+        # Gradient clipping for stability (same as aimnet2)
+        torch.nn.utils.clip_grad_value_(model.parameters(), 0.4)
         optimizer.step()
 
         # Store loss separately for WandB logging
