@@ -152,13 +152,16 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     # Log validation metrics (filter out non-numeric values like nested dicts)
     def log_val_metrics(engine):
         metrics = engine.state.metrics
+        logging.info(f"[WANDB DEBUG] Validation completed. Metrics keys: {list(metrics.keys()) if metrics else 'None'}")
         if metrics:
             val_metrics = {}
             for key, value in metrics.items():
                 if isinstance(value, (int, float)):
                     val_metrics[f'val/{key}'] = value
+            logging.info(f"[WANDB DEBUG] Logging val metrics: {list(val_metrics.keys())}")
             if val_metrics:
                 wandb.log(val_metrics, step=trainer.state.iteration)
+                logging.info(f"[WANDB DEBUG] Successfully logged {len(val_metrics)} val metrics at step {trainer.state.iteration}")
 
     validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
 
