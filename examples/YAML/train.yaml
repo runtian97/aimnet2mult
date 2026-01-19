@@ -1,31 +1,32 @@
-# Mixed-Fidelity Batches Training Configuration
+# AIMNet2 Multi-Fidelity Training Configuration
 #
-# This configuration demonstrates training where BATCHES CAN CONTAIN
-# MOLECULES FROM DIFFERENT FIDELITIES (truly mixed batches)
+# Configure fidelity_datasets, fidelity_weights, and sae.energy.files
+# via command line or by editing this file directly.
 
-run_name: mismatched_example
+run_name: ???
+project_name: ???
 
 # Fidelity settings
 fidelity_offset: 200
-use_fidelity_readouts: true  # Use fidelity-dependent readouts
+use_fidelity_readouts: true
 
 data:
-  # Fidelity datasets (specified via command line)
+  # Fidelity datasets (specify paths or override via command line)
   fidelity_datasets: {}
 
-  # Fidelity weights (specified via command line)
+  # Fidelity weights (higher weight = more samples from that fidelity)
   fidelity_weights: {}
 
   val_fidelity_datasets: null
 
-  # SAE files (specified via command line)
+  # SAE files (one per fidelity)
   sae:
     energy:
       files: {}
       mode: linreg
 
   # Validation settings
-  val_fraction: 0.01  # Use 1% for validation (faster for large datasets)
+  val_fraction: 0.005
   separate_val: true
   ddp_load_full_dataset: false
 
@@ -37,30 +38,30 @@ data:
   samplers:
     train:
       kwargs:
-        batch_size: 32
-        batch_mode: molecules
+        batch_size: 800
+        batch_mode: atoms
         shuffle: true
-        batches_per_epoch: 100
-        sampling_strategy: weighted  # Weighted sampling across fidelities
+        batches_per_epoch: 50000
+        sampling_strategy: weighted
 
     val:
       kwargs:
-        batch_size: 64
+        batch_size: 2000
         batch_mode: atoms
         shuffle: false
-        batches_per_epoch: 100  # Limit validation batches for speed (was -1 for all data)
+        batches_per_epoch: 1000
         sampling_strategy: uniform
 
   # DataLoader settings
   loaders:
     train:
-      num_workers: 0
+      num_workers: 4
       pin_memory: true
     val:
-      num_workers: 0
+      num_workers: 2
       pin_memory: true
 
-# Loss function
+# Loss function - energy-focused
 loss:
   class: aimnet2mult.train.loss.MTLoss
   kwargs:
@@ -70,75 +71,66 @@ loss:
         weight: 1.0
       forces:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.2
+        weight: 0.05
         kwargs:
           key_true: forces
           key_pred: forces
       charges:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.05
+        weight: 0.01
         kwargs:
           key_true: charges
           key_pred: charges
       spin_charges:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.05
+        weight: 0.01
         kwargs:
           key_true: spin_charges
           key_pred: spin_charges
 
-# Optimizer
+# Optimizer - AdamW
 optimizer:
   force_no_train: []
   force_train: []
-  class: torch.optim.RAdam
+  class: torch.optim.AdamW
   kwargs:
-    lr: 0.0001
-    weight_decay: 1e-8
+    lr: 0.00005
+    weight_decay: 1e-6
+    betas: [0.9, 0.999]
+    eps: 1e-8
   param_groups:
     embeddings:
       re: 'afv.weight'
-      lr: 0.00005
+      lr: 0.000025
       weight_decay: 0.0
     shifts:
       re: '.*.atomic_shift.shifts.weight$'
       weight_decay: 0.0
 
-# Learning rate scheduler
-## Option 1: ReduceLROnPlateau (adaptive, recommended)
-#scheduler:
-#  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
-#  kwargs:
-#    metric_name: loss
-#    factor: 0.75              # Reduce LR by 25% each time
-#    patience: 3               # Wait 3 epochs before reducing
-#  terminate_on_low_lr: 1.0e-5 # Stop if LR drops below this threshold
-
-#Option 2: CosineAnnealingScheduler (smooth cosine decay)
+# Learning rate scheduler - ReduceLROnPlateau (adaptive)
 scheduler:
-   class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
-   kwargs:
-     param_name: lr
-     start_value: 1.0e-4       # Starting learning rate
-     end_value: 1.0e-6         # Final learning rate
-     cycle_size: 10            # Cycle over 10 epochs (match trainer.epochs)
-   terminate_on_low_lr: 0.0    # Disable early termination (0.0 = disabled)
+  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  kwargs:
+    metric_name: loss
+    factor: 0.5
+    patience: 5
+  terminate_on_low_lr: 1.0e-7
 
 # Training
 trainer:
-  epochs: 10
+  epochs: 200
 
-# Logging frequency (iterations) - for smooth plots
+# Logging frequency (iterations)
 log_frequency:
-  train: 10           # Log train metrics every 10 iterations
-  val: 10             # Run validation every 10 iterations
+  train: 10
+  val: 10
 
 # Checkpointing
 checkpoint:
   dirname: checkpoints
   filename_prefix: ${run_name}
   kwargs:
-    n_saved: 2
+    n_saved: 10
     require_empty: false
 
 # Weights & Biases logger
@@ -150,27 +142,28 @@ wandb:
     project: ${project_name}
     notes: null
   watch_model:
-    log: all
+    log: gradients
     log_freq: 5000
-    log_graph: true
+    log_graph: false
 
-# Metrics (same configurable format as base aimnet2)
-# Internal units: eV, so scale factor converts eV → kcal/mol
+# Metrics
 metrics:
   class: aimnet2mult.train.metrics.RegMultiMetric
   kwargs:
     cfg:
       energy:
         abbr: E
-        scale: 23.06  # eV to kcal/mol
+        scale: 23.06
       forces:
         abbr: F
-        peratom: True
+        peratom: true
         mult: 3
-        scale: 23.06  # eV/Å to kcal/mol/Å
+        scale: 23.06
       charges:
         abbr: q
-        peratom: True
+        peratom: true
+        scale: 1.0
       spin_charges:
         abbr: s
-        peratom: True
+        peratom: true
+        scale: 1.0
