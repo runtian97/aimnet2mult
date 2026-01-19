@@ -295,17 +295,23 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
             trainer.add_event_handler(Events.EPOCH_COMPLETED, log_train_metrics)
 
     # Run validation - configurable frequency
+    # New format: log_frequency.val (iterations)
+    # Old format: val_frequency.mode + val_frequency.every (backward compatible)
+    log_frequency = train_cfg.get("log_frequency", None)
     val_frequency = train_cfg.get("val_frequency", None)
 
-    # Determine validation frequency
-    if val_frequency is not None:
+    if log_frequency is not None and log_frequency.get("val") is not None:
+        # New format: log_frequency.val = number of iterations
+        val_every = log_frequency.get("val", 10)
+        logging.info("Validation will run every %d iterations (log_frequency.val)", val_every)
+        trainer.add_event_handler(Events.ITERATION_COMPLETED(every=val_every), validator.run, data=val_loader)
+    elif val_frequency is not None:
+        # Old format: val_frequency with mode
         if val_frequency.get("mode") == "iterations":
-            # High-frequency validation: run every N iterations for smooth curves
             val_every = val_frequency.get("every", 200)
-            logging.info("Validation will run every %d iterations", val_every)
+            logging.info("Validation will run every %d iterations (val_frequency)", val_every)
             trainer.add_event_handler(Events.ITERATION_COMPLETED(every=val_every), validator.run, data=val_loader)
         elif val_frequency.get("mode") == "epochs":
-            # Run every N epochs
             val_every = val_frequency.get("every", 1)
             logging.info("Validation will run every %d epochs", val_every)
             trainer.add_event_handler(Events.EPOCH_COMPLETED(every=val_every), validator.run, data=val_loader)

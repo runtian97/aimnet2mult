@@ -137,15 +137,20 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
-    # Log training loss every 10 iterations
+    # Get logging frequency from config (default: 10 iterations)
+    log_frequency = cfg.get("log_frequency", {})
+    train_log_every = log_frequency.get("train", 10)
+    logging.info(f"Training metrics will be logged every {train_log_every} iterations")
+
+    # Log training loss
     wandb_logger.attach_output_handler(
         trainer,
-        event_name=Events.ITERATION_COMPLETED(every=10),
+        event_name=Events.ITERATION_COMPLETED(every=train_log_every),
         output_transform=lambda output: {"loss": trainer.state.loss},
         tag='train'
         )
 
-    # Log validation metrics using ignite's built-in handler (same as aimnet2)
+    # Log validation metrics using ignite's built-in handler
     # This logs all metrics: E_rmse, E_mae, F_rmse, F_mae, q_rmse, s_rmse, etc.
     wandb_logger.attach_output_handler(
         validator,
@@ -155,7 +160,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         tag='val'
         )
 
-    # Log batch-level RMSE every 10 iterations for high-frequency monitoring
+    # Log batch-level RMSE for high-frequency monitoring
     # (energy, forces, charges, spin_charges in kcal/mol)
     def log_batch_rmse(engine):
         if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
@@ -174,7 +179,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
             if metrics:
                 wandb.log(metrics, step=trainer.state.iteration)
 
-    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=10), log_batch_rmse)
+    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=train_log_every), log_batch_rmse)
 
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):

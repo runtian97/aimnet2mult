@@ -128,10 +128,10 @@ scheduler:
 trainer:
   epochs: 10
 
-# Validation frequency - for smooth plots
-val_frequency:
-  mode: iterations
-  every: 10
+# Logging frequency (iterations) - for smooth plots
+log_frequency:
+  train: 10           # Log train metrics every 10 iterations
+  val: 10             # Run validation every 10 iterations
 
 # Checkpointing
 checkpoint:
