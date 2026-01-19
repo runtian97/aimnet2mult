@@ -155,7 +155,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         tag='val'
         )
 
-    # Log batch-level RMSE every 200 iterations for high-frequency monitoring
+    # Log batch-level RMSE every 10 iterations for high-frequency monitoring
     # (energy, forces, charges, spin_charges in kcal/mol)
     def log_batch_rmse(engine):
         if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
