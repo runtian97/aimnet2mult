@@ -340,6 +340,19 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
         kwargs["global_step_transform"] = global_step_from_engine(trainer)
         kwargs["dirname"] = checkpoint_cfg.dirname
         kwargs["filename_prefix"] = checkpoint_cfg.filename_prefix
+
+        # Save best models based on validation loss (lower is better)
+        save_best = checkpoint_cfg.get("save_best", False)
+        if save_best:
+            # score_function returns higher value for better models
+            # Since we minimize loss, we return negative loss
+            score_function = lambda engine: -engine.state.metrics.get('loss', float('inf'))
+            kwargs["score_function"] = score_function
+            kwargs["score_name"] = "val_loss"
+            logging.info("Checkpointing: saving best %d models by validation loss", kwargs.get("n_saved", 1))
+        else:
+            logging.info("Checkpointing: saving most recent %d models", kwargs.get("n_saved", 1))
+
         checkpointer = ModelCheckpoint(**kwargs)
 
         # Prepare checkpoint objects dict

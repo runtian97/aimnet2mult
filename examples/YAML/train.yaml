@@ -129,6 +129,7 @@ log_frequency:
 checkpoint:
   dirname: checkpoints
   filename_prefix: ${run_name}
+  save_best: true             # Save best models by validation loss (not most recent)
   kwargs:
     n_saved: 10
     require_empty: false
