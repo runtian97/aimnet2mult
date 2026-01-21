@@ -20,7 +20,7 @@ cd aimnet2mult
 pip install -e .
 
 # Optional: Install dispersion packages for D3/D4 support
-pip install dftd3-python dftd4
+pip install dftd3 dftd4
 
 # Optional: Install wandb for experiment tracking
 pip install wandb
