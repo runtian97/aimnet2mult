@@ -35,7 +35,11 @@ data:
   ddp_load_full_dataset: false
 
   # Data keys
+  # Required inputs: coord, numbers, charge
+  # Optional inputs: mult (multiplicity, defaults to 1 if missing)
   x: [coord, numbers, charge, mult]
+  # Required labels: energy
+  # Optional labels: forces, charges, spin_charges (masked if missing)
   y: [energy, forces, charges, spin_charges]
 
   # Sampler configuration

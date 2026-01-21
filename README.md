@@ -1,21 +1,82 @@
 # AIMNet2mult - Multi-Fidelity Neural Network Potential
 
-A PyTorch implementation of AIMNet2 with **mixed-fidelity training** support. Train a single model on datasets from different computational methods simultaneously.
+A PyTorch implementation of AIMNet2 with **mixed-fidelity training** and **per-fidelity dispersion** support. Train a single model on datasets from different computational methods simultaneously.
 
 ## Key Features
 
 - **Mixed-Fidelity Training**: Single model learns from multiple data sources with different accuracy levels
+- **Per-Fidelity Dispersion**: Add different DFT-D3/D4 dispersion corrections per fidelity during compilation
 - **Heterogeneous Labels**: Different datasets can have different available properties (energy, forces, charges, etc.)
 - **Automatic Masking**: Loss calculation automatically adapts to available labels per sample
 - **Transfer Learning**: Load pretrained weights and fine-tune on new datasets
 - **TorchScript Export**: Compile models for fast production inference
+- **Wandb Integration**: Built-in experiment tracking and visualization
 
 ## Installation
 
 ```bash
 git clone https://github.com/runtian97/aimnet2mult.git
 cd aimnet2mult
-pip install .
+pip install -e .
+
+# Optional: Install dispersion packages for D3/D4 support
+pip install dftd3-python dftd4
+
+# Optional: Install wandb for experiment tracking
+pip install wandb
+wandb login
+```
+
+## Quick Start
+
+### Step 1: Calculate SAE for each fidelity dataset
+
+```bash
+python -m aimnet2mult.train.calc_sae fid0_dataset.h5 sae_fid0.yaml
+python -m aimnet2mult.train.calc_sae fid1_dataset.h5 sae_fid1.yaml
+python -m aimnet2mult.train.calc_sae fid2_dataset.h5 sae_fid2.yaml
+```
+
+### Step 2: Train the model
+
+```bash
+python -m aimnet2mult.train.cli \
+    --config train.yaml \
+    --model model.yaml \
+    --save model.pt \
+    data.fidelity_datasets.0="fid0_dataset.h5" \
+    data.fidelity_datasets.1="fid1_dataset.h5" \
+    data.fidelity_datasets.2="fid2_dataset.h5" \
+    data.sae.energy.files.0="sae_fid0.yaml" \
+    data.sae.energy.files.1="sae_fid1.yaml" \
+    data.sae.energy.files.2="sae_fid2.yaml"
+```
+
+### Step 3: Compile with dispersion
+
+```bash
+python -m aimnet2mult.tools.compile_jit \
+    --weights model.pt \
+    --model model.yaml \
+    --output compiled_model \
+    --fidelity-level 0 \
+    --fidelity-offset 200 \
+    --num-fidelities 3 \
+    --use-fidelity-readouts true \
+    --sae sae_fid0.yaml \
+    --dispersion d3bj \
+    --dispersion-functional wb97m
+```
+
+### Continue Training from Checkpoint
+
+```bash
+python -m aimnet2mult.train.cli \
+    --config train.yaml \
+    --model model.yaml \
+    --load pretrained_model.pt \
+    --save continued_model.pt \
+    ...
 ```
 
 ## Package Structure
@@ -23,83 +84,293 @@ pip install .
 ```
 aimnet2mult/
 ├── aimnet2mult/                    # Core package
-│   ├── models/                     # Neural network architectures
-│   │   ├── aimnet2.py             # Base AIMNet2 model
-│   │   ├── mixed_fidelity_aimnet2.py  # Multi-fidelity wrapper
-│   │   ├── base.py                # Abstract base classes
-│   │   └── jit_wrapper.py         # TorchScript export utilities
-│   │
-│   ├── data/                       # Data loading and processing
-│   │   ├── base.py                # MultiFidelityDataset base class
-│   │   ├── mixed.py               # MixedFidelityDataset (applies atomic number offsets)
-│   │   ├── sgdataset.py           # Size-grouped HDF5 dataset
-│   │   ├── sampler.py             # Mixed-fidelity batch sampler
-│   │   ├── collate.py             # Collate function with automatic masking
-│   │   └── loaders.py             # DataLoader creation utilities
-│   │
-│   ├── train/                      # Training infrastructure
-│   │   ├── cli.py                 # Command-line interface
-│   │   ├── runner.py              # Training orchestration
-│   │   ├── engine.py              # Ignite engines (trainer/evaluator)
-│   │   ├── loss.py                # Loss functions with masking support
-│   │   ├── metrics.py             # Evaluation metrics
-│   │   ├── configuration.py       # Config loading and validation
-│   │   ├── calc_sae.py            # Self-atomic energy calculation
-│   │   └── utils.py               # Optimizer, scheduler, WandB setup
-│   │
-│   ├── tools/                      # Utilities
-│   │   └── compile_jit.py         # TorchScript compilation
+│   ├── __init__.py
+│   ├── aev.py                      # Atomic environment vectors
+│   ├── calculators.py              # ASE calculator interface
+│   ├── constants.py                # Physical constants
+│   ├── d3bj_data.pt                # D3-BJ C6 reference coefficients
+│   ├── modules.py                  # Neural network modules (MLP, DFTD3, AtomicShift, etc.)
+│   ├── nbops.py                    # Neighbor list operations
+│   ├── ops.py                      # Tensor operations
 │   │
 │   ├── config/                     # Configuration system
-│   │   ├── builder.py             # Module instantiation from YAML
-│   │   ├── default_model.yaml     # Default model architecture
+│   │   ├── __init__.py
+│   │   ├── builder.py              # Module instantiation from YAML
+│   │   ├── default_model.yaml      # Default model architecture
 │   │   └── default_train_mixed_fidelity.yaml  # Default training config
 │   │
-│   ├── utils/                      # Utilities
-│   │   ├── derivatives.py         # Hessian and higher-order derivatives
-│   │   ├── units.py               # Unit conversions (Hartree ↔ eV)
-│   │   └── imports.py             # Path utilities
+│   ├── data/                       # Data loading and processing
+│   │   ├── __init__.py
+│   │   ├── base.py                 # MultiFidelityDataset base class
+│   │   ├── collate.py              # Collate function with automatic masking
+│   │   ├── loaders.py              # DataLoader creation utilities
+│   │   ├── mixed.py                # MixedFidelityDataset (applies atomic number offsets)
+│   │   ├── sampler.py              # Mixed-fidelity batch sampler
+│   │   └── sgdataset.py            # Size-grouped HDF5 dataset with SAE calculation
 │   │
-│   ├── modules.py                  # Neural network modules (MLP, Output, etc.)
-│   ├── aev.py                      # Atomic environment vectors
-│   ├── ops.py                      # Tensor operations
-│   ├── nbops.py                    # Neighbor list operations
-│   └── constants.py                # Physical constants
+│   ├── models/                     # Neural network architectures
+│   │   ├── __init__.py
+│   │   ├── aimnet2.py              # Base AIMNet2 model
+│   │   ├── base.py                 # Abstract base classes
+│   │   ├── jit_wrapper.py          # TorchScript export utilities
+│   │   └── mixed_fidelity_aimnet2.py  # Multi-fidelity wrapper
+│   │
+│   ├── tools/                      # Utilities
+│   │   ├── __init__.py
+│   │   ├── compile_jit.py          # TorchScript compilation with SAE and dispersion
+│   │   ├── create_fake_data.py     # Generate test data
+│   │   └── dispersion_params.py    # D3/D4 parameter loading
+│   │
+│   ├── train/                      # Training infrastructure
+│   │   ├── __init__.py
+│   │   ├── calc_sae.py             # Self-atomic energy calculation script
+│   │   ├── cli.py                  # Command-line interface (--load for transfer learning)
+│   │   ├── configuration.py        # Config loading and validation
+│   │   ├── engine.py               # Ignite engines (trainer/evaluator)
+│   │   ├── fidelity_specific_utils.py  # Fidelity-specific utilities
+│   │   ├── loss.py                 # Loss functions with masking support
+│   │   ├── metrics.py              # Evaluation metrics
+│   │   ├── runner.py               # Training orchestration
+│   │   └── utils.py                # Optimizer, scheduler, WandB setup
+│   │
+│   └── utils/                      # Utility functions
+│       ├── __init__.py
+│       └── units.py                # Unit conversion utilities
 │
-└── examples/                       # Example scripts and data
-    ├── YAML/                       # Configuration files
-    │   ├── model.yaml             # Model architecture config
-    │   └── train.yaml             # Training parameters config
-    ├── fake_dataset/               # Synthetic datasets for testing
-    │   ├── fidelity0.h5           # High-fidelity (all labels)
-    │   ├── fidelity1.h5           # Mid-fidelity (partial labels)
-    │   └── fidelity2.h5           # Low-fidelity (energy + spin only)
-    │  
-    ├── train.sh                    # Training from scratch
-    ├── train_load_weight.sh        # Transfer learning example
-    └── train_single_fidelity.sh    # Single-fidelity training
+├── examples/                       # Example scripts and configs
+│   ├── config/
+│   │   ├── model.yaml              # Model architecture config
+│   │   └── train.yaml              # Training configuration
+│   ├── continue_training.sh        # Continual training from checkpoint
+│   ├── run_example.sh              # Initial training script
+│   └── README.md                   # Example instructions
+│
+├── .gitignore
+├── LICENSE
+├── README.md
+├── pyproject.toml
+├── requirements.txt
+└── setup.py
 ```
 
-## Quick Start
+## Training Architecture
 
-### Training
+### Overview
 
-See example scripts in `examples/`:
+The multi-fidelity AIMNet2 model uses a shared backbone with fidelity-specific readout heads. During training, molecules from different fidelity levels are distinguished by offsetting their atomic numbers.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Multi-Fidelity AIMNet2 Training                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Input: Molecules from multiple fidelity datasets                           │
+│         Fidelity 0: Z → Z        (e.g., wB97M-D3 high-fidelity)            │
+│         Fidelity 1: Z → Z + 200  (e.g., B3LYP medium-fidelity)             │
+│         Fidelity 2: Z → Z + 400  (e.g., PM7 low-fidelity)                  │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  Shared Backbone                                                       │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  Atomic Feature Vectors (AFV) Embedding                          │  │ │
+│  │  │  - Extended embedding table: [0..118, 200..318, 400..518, ...]  │  │ │
+│  │  │  - Each fidelity learns its own element representations          │  │ │
+│  │  └─────────────────────────────────────────────────────────────────┘  │ │
+│  │                              ↓                                         │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  AEV (Atomic Environment Vectors)                                │  │ │
+│  │  │  - Radial symmetry functions                                     │  │ │
+│  │  │  - Angular symmetry functions                                    │  │ │
+│  │  └─────────────────────────────────────────────────────────────────┘  │ │
+│  │                              ↓                                         │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  Message Passing Layers                                          │  │ │
+│  │  │  - Shared convolution weights                                    │  │ │
+│  │  │  - Shared MLP transformations                                    │  │ │
+│  │  └─────────────────────────────────────────────────────────────────┘  │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  Fidelity-Specific Readout Heads                                      │ │
+│  │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                 │ │
+│  │  │ Fidelity 0  │   │ Fidelity 1  │   │ Fidelity 2  │                 │ │
+│  │  │ - Energy MLP│   │ - Energy MLP│   │ - Energy MLP│                 │ │
+│  │  │ - Charges   │   │ - Charges   │   │ - Charges   │                 │ │
+│  │  │ - Atomic    │   │ - Atomic    │   │ - Atomic    │                 │ │
+│  │  │   Shifts    │   │   Shifts    │   │   Shifts    │                 │ │
+│  │  └─────────────┘   └─────────────┘   └─────────────┘                 │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  Outputs: energy, forces (via autograd), charges, spin_charges             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Training Concepts
+
+1. **Atomic Number Offsetting**: Each fidelity uses a different atomic number space
+   - Fidelity 0: H=1, C=6, N=7, O=8, ...
+   - Fidelity 1: H=201, C=206, N=207, O=208, ...
+   - Fidelity 2: H=401, C=406, N=407, O=408, ...
+
+2. **Shared vs Fidelity-Specific Parameters**:
+   - Shared: Message passing layers, convolutions
+   - Per-fidelity: Readout MLPs, atomic shift embeddings
+
+3. **Heterogeneous Label Masking**: Loss automatically masks missing labels per molecule
+
+### SAE + Atomic Number Offsets: Training, Compilation, Inference
+
+- **Training (mixed-fidelity)**:
+  - `MixedFidelityDataset` applies atomic number offsets per fidelity level before batching.
+  - SAE corrections are loaded per fidelity and applied during data loading (`_apply_sae`), so training targets are residual energies.
+  - The model sees offset `numbers` and uses the expanded embedding table (offset blocks).
+
+- **Compilation (per-fidelity JIT)**:
+  - `compile_jit.py` slices the trained embedding table and atomic-shift weights for the target fidelity.
+  - The compiled model is wrapped with `FidelityModelWithSAE` (and optional D3BJ) to **add SAE back** at inference.
+  - SAE lookup uses `shifted_numbers = numbers + fidelity_level * fidelity_offset` internally.
+
+- **Inference (compiled model)**:
+  - Provide **unshifted** atomic numbers (standard Z=1..118).
+  - The wrapper injects the fidelity label and applies SAE with the appropriate offset.
+  - Each compiled `.jpt` is fidelity-specific, so use the matching model for that dataset.
+
+### Compilation (Inference-Ready Models)
+
+After training, models are compiled per-fidelity with SAE and optional dispersion:
+
+```
+Trained Weights → Extract per-fidelity → Add SAE + Dispersion → TorchScript
+
+   ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+   │   Fidelity 0    │     │   Fidelity 1    │     │   Fidelity 2    │
+   │   + SAE         │     │   + SAE         │     │   + SAE         │
+   │   + D3-BJ       │     │   + D3-BJ       │     │   + None        │
+   │   (wB97M)       │     │   (B3LYP)       │     │                 │
+   └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+            │                       │                       │
+            ▼                       ▼                       ▼
+      model_fid0.jpt          model_fid1.jpt          model_fid2.jpt
+```
+
+## Self-Atomic Energy (SAE)
+
+### What is SAE?
+
+Self-Atomic Energy (SAE) represents the baseline energy contribution of each atom type. By subtracting SAE during training and adding it back during inference, the neural network only needs to learn the **residual** molecular interaction energy rather than absolute atomic energies.
+
+### How SAE is Calculated
+
+SAE values are computed via **linear regression** on the training dataset:
+
+```
+E_molecule = Σ SAE(Z_i) + E_residual
+```
+
+The calculation:
+1. Build a composition matrix F where F[mol, Z] = count of element Z in molecule
+2. Solve the linear system: F × SAE = E (using least squares)
+3. Outlier filtering: Remove 2nd and 98th percentile energies, then recalculate
+
+### SAE Calculation Script
 
 ```bash
-# Train from scratch with 3 fidelities
-bash examples/train.sh
-
-# Transfer learning from pretrained model
-bash examples/train_load_weight.sh
-
-# Single-fidelity training
-bash examples/train_single_fidelity.sh
+python -m aimnet2mult.train.calc_sae dataset.h5 sae.yaml
 ```
 
-**Configuration files:**
-- `examples/YAML/train.yaml` - Training parameters, dataset paths, loss weights
-- `examples/YAML/model.yaml` - Model architecture (layer sizes, features, etc.)
+Output format (`sae.yaml`):
+```yaml
+1: -13.587234      # Hydrogen
+6: -1029.476123    # Carbon
+7: -1485.234567    # Nitrogen
+8: -2041.789012    # Oxygen
+```
+
+### SAE in the Pipeline
+
+```
+Training Phase:
+  Dataset energies → Subtract SAE → Train on residuals
+
+Inference Phase:
+  Model predicts residuals → Add SAE back → Final energy
+```
+
+## Dispersion Corrections
+
+### Overview
+
+Dispersion (van der Waals) corrections account for long-range correlation effects not captured by most DFT functionals. The package supports embedding DFT-D3 with Becke-Johnson (BJ) damping directly into compiled models.
+
+### DFT-D3 Theory
+
+The D3-BJ dispersion energy:
+
+```
+E_disp = -Σ_AB [ s6 * C6_AB / (R_AB^6 + (a1*√(C8/C6) + a2)^6)
+              + s8 * C8_AB / (R_AB^8 + (a1*√(C8/C6) + a2)^8) ]
+```
+
+Where:
+- **C6, C8**: Dispersion coefficients (depend on coordination numbers)
+- **R_AB**: Interatomic distance
+- **s6, s8, a1, a2**: Functional-specific damping parameters
+
+### Available Functionals
+
+| Functional | s6   | s8     | a1     | a2     |
+|------------|------|--------|--------|--------|
+| `b3lyp`    | 1.0  | 1.9889 | 0.3981 | 4.4211 |
+| `pbe`      | 1.0  | 0.7875 | 0.4289 | 4.4407 |
+| `pbe0`     | 1.0  | 1.2177 | 0.4145 | 4.8593 |
+| `wb97x`    | 1.0  | 0.0000 | 0.0000 | 5.4959 |
+| `wb97m`    | 1.0  | 0.3908 | 0.5660 | 3.1280 |
+| `tpss`     | 1.0  | 1.9435 | 0.4535 | 4.4752 |
+| `bp86`     | 1.0  | 3.2822 | 0.3946 | 4.8516 |
+| `m062x`    | 1.0  | 0.0000 | 0.0000 | 5.0580 |
+| `b973c`    | 1.0  | 1.5000 | 0.3700 | 4.1000 |
+
+### Dispersion Options
+
+When compiling models, specify dispersion via command line:
+
+```bash
+# No dispersion
+python -m aimnet2mult.tools.compile_jit \
+    --dispersion none \
+    ...
+
+# D3-BJ with predefined functional
+python -m aimnet2mult.tools.compile_jit \
+    --dispersion d3bj \
+    --dispersion-functional wb97m \
+    ...
+
+# D3-BJ with custom parameters
+python -m aimnet2mult.tools.compile_jit \
+    --dispersion d3bj \
+    --dispersion-s6 1.0 \
+    --dispersion-s8 0.5 \
+    --dispersion-a1 0.4 \
+    --dispersion-a2 4.5 \
+    ...
+```
+
+### Per-Fidelity Dispersion
+
+Different fidelities can have different dispersion settings:
+
+```bash
+# Fidelity 0: wB97M-D3 (already includes D3)
+--fidelity-level 0 --dispersion d3bj --dispersion-functional wb97m
+
+# Fidelity 1: Pure functional, no dispersion in reference data
+--fidelity-level 1 --dispersion none
+
+# Fidelity 2: B3LYP-D3
+--fidelity-level 2 --dispersion d3bj --dispersion-functional b3lyp
+```
 
 ## Data Format
 
@@ -108,196 +379,82 @@ Molecular data is stored in HDF5 files with molecules grouped by atom count:
 ```
 dataset.h5
 ├── 3/                          # Molecules with 3 atoms
-│   ├── coord                   # (n_mols, 3, 3) float32 - Cartesian coordinates (Å)
+│   ├── coord                   # (n_mols, 3, 3) float32 - Coordinates (Å)
 │   ├── numbers                 # (n_mols, 3) int32 - Atomic numbers
-│   ├── charge                  # (n_mols,) float32 - Total molecular charge
-│   ├── energy                  # (n_mols,) float32 - Total energy (eV) 
-│   ├── forces                  # (n_mols, 3, 3) float32 - Atomic forces (eV/Å) [OPTIONAL]
-│   ├── charges                 # (n_mols, 3) float32 - Partial atomic charges (e) [OPTIONAL]
-│   ├── spin_charges            # (n_mols, 3) float32 - Spin densities (e) [OPTIONAL]
-│   └── mult                    # (n_mols,) float32 - Spin multiplicity [OPTIONAL, defaults to 1]
-│
-├── 4/                          # Molecules with 4 atoms
-│   ├── coord                   # (n_mols, 4, 3) float32
-│   ├── numbers                 # (n_mols, 4) int32
+│   ├── charge                  # (n_mols,) float32 - Molecular charge
+│   ├── energy                  # (n_mols,) float32 - Energy (eV)
+│   ├── forces                  # (n_mols, 3, 3) float32 - Forces [OPTIONAL]
+│   ├── charges                 # (n_mols, 3) float32 - Partial charges [OPTIONAL]
+│   ├── spin_charges            # (n_mols, 3) float32 - Spin densities [OPTIONAL]
+│   └── mult                    # (n_mols,) float32 - Multiplicity [OPTIONAL]
+├── 4/
 │   └── ...
-│
-└── N/                          # Molecules with N atoms
+└── N/
     └── ...
 ```
 
-**Notes:**
-- `coord`, `numbers`, `charge`, and `energy` are required fields
-- All other labels (`forces`, `charges`, `spin_charges`, `mult`) are optional
-- Different datasets can have different combinations of optional labels
-- Missing labels are automatically masked during training
-
-### Inference
-
-#### Load TorchScript Model
+## Inference
 
 ```python
 import torch
-from openbabel import pybel
 
 # Load compiled model
-filename = '/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run/model_fid1.jpt'
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = torch.jit.load(filename, map_location=device)
-
-# Load molecule
-mol_file = '/Users/nickgao/Desktop/pythonProject/local_code_template/test_sdfs/CAMVES_a.sdf'
-mol = next(pybel.readfile('sdf', mol_file))
+model = torch.jit.load('model_fid0.jpt', map_location='cpu')
 
 # Prepare input
-coord = torch.as_tensor([a.coords for a in mol.atoms]).unsqueeze(0).to(device)
-numbers = torch.as_tensor([a.atomicnum for a in mol.atoms]).unsqueeze(0).to(device)
-charge = torch.as_tensor([mol.charge]).to(device)
-mult = torch.as_tensor([mol.spin]).to(device)
-
-_in = dict(
-    coord=coord,
-    numbers=numbers,
-    charge=charge,
-    mult=mult,
-)
+data = {
+    'coord': torch.tensor([[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]]),
+    'numbers': torch.tensor([[8, 1, 1]]),
+    'charge': torch.tensor([0.0]),
+    'mult': torch.tensor([1.0])
+}
 
 # Run inference
-_out = model(_in)
-energy = _out['energy']         # Total energy (eV)
-forces = _out['forces']         # Atomic forces (eV/Å)
-charges = _out['charges']       # Partial charges (e)
-spin = _out['spin_charges']     # Spin densities (e)
+output = model(data)
+print(f"Energy: {output['energy'].item():.6f} eV")
+print(f"Forces shape: {output['forces'].shape}")
 ```
 
-#### Compute Hessian (Second Derivatives)
+## Configuration
 
-```python
-import torch
-from openbabel import pybel
-from aimnet2mult.models.jit_wrapper import load_jit_model
+### Training Configuration (`train.yaml`)
 
-# Load the TorchScript model
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-model_path = "/Users/nickgao/Desktop/pythonProject/aimnet2mult/examples/run/model_fid1.jpt"
+Key settings:
+```yaml
+fidelity_offset: 200              # Atomic number offset between fidelities
+use_fidelity_readouts: true       # Fidelity-specific output heads
 
-model = load_jit_model(model_path)
-mol_path = '/Users/nickgao/Desktop/pythonProject/local_code_template/test_sdfs/CAMVES_a.sdf'
+data:
+  fidelity_datasets:
+    0: path/to/fidelity_0.h5
+    1: path/to/fidelity_1.h5
+  fidelity_weights:
+    0: 1.0
+    1: 1.0
+  sae:
+    energy:
+      files:
+        0: path/to/sae_fid0.yaml
+        1: path/to/sae_fid1.yaml
 
-# Load molecule
-mol = next(pybel.readfile('sdf', mol_path))
-
-# Prepare input with gradient tracking
-coord = torch.as_tensor([a.coords for a in mol.atoms]).unsqueeze(0).to(device)
-coord.requires_grad_(True)  # Enable gradient for Hessian computation
-numbers = torch.as_tensor([a.atomicnum for a in mol.atoms]).unsqueeze(0).to(device)
-charge = torch.as_tensor([mol.charge]).to(device)
-mult = torch.as_tensor([mol.spin]).to(device)
-
-_in = {"coord": coord, "numbers": numbers, "charge": charge, "mult": mult}
-
-# Predict forces and Hessian
-_out = model(_in, compute_hessian=True, hessian_mode="autograd")
-
-print("Forces shape:", _out["forces"])
-print("Hessian:", _out["hessian"])
-print(_out.keys())
+wandb:
+  init:
+    mode: online                  # online, offline, or disabled
+    project: my_project
 ```
 
-## Core Concepts
+## Wandb Integration
 
-### Mixed-Fidelity Training
+Training metrics are automatically logged to wandb:
+- Energy/Forces/Charges MAE and RMSE
+- Per-fidelity validation metrics
+- Learning rate schedule
+- System metrics (GPU usage, memory)
 
-Train on datasets from different computational methods simultaneously:
-
-- **Atomic Number Offsetting**: Element Z becomes Z, Z+200, Z+400 for fidelities 0, 1, 2 (configurable via `fidelity_offset` in training config)
-- **Fidelity-Specific Layers**: Each fidelity has its own readout layers and embeddings
-- **Weighted Sampling**: Control how often each fidelity is sampled during training
-
-#### How Atomic Number Shifting Works
-
-The atomic number shifting mechanism differs across training, compilation, and inference to enable multi-fidelity learning while maintaining a clean user interface.
-
-**Example: Water molecule (O, H, H) in Fidelity 1 with offset=200**
-
-##### Training
-- **Data loading** shifts both atomic numbers and SAE keys by the fidelity offset
-- Model receives pre-shifted inputs and uses them directly
-
-```
-Input atomic numbers: [8, 1, 1] (original)
-  ↓ Shift +200 (data layer)
-Training data: [208, 201, 201] (shifted)
-  ↓
-Model embedding lookup: afv[208], afv[201], afv[201] ✓
-SAE keys: {201: -0.5, 208: -75.0} (also shifted +200)
-  ↓
-Direct SAE lookup for shifted numbers ✓
-```
-
-##### Compilation
-- **Extracts** fidelity-specific weights and **restores** AFV embeddings to standard indexing
-- **Shifts** SAE keys during storage
-
-```
-Trained model AFV [size 728]:
-  Rows 200-328 (fidelity 1 embeddings)
-    ↓ Extract and remap
-Compiled model AFV [size 128]:
-  Rows 0-128 (standard indexing)
-  afv[201] → afv[1], afv[208] → afv[8] ✓
-
-Original SAE: {1: -0.5, 8: -75.0}
-    ↓ Shift +200 during storage
-Compiled SAE storage: {201: -0.5, 208: -75.0} ✓
-```
-
-##### Inference
-- User provides **standard** atomic numbers
-- Base model uses standard indexing
-- SAE wrapper shifts numbers only for SAE lookup
-
-```
-User input: [8, 1, 1] (standard)
-  ↓
-Base model: afv[8], afv[1], afv[1] (standard lookup) ✓
-  ↓
-SAE wrapper: [8, 1, 1] + 200 = [208, 201, 201]
-  ↓
-SAE lookup: sae_tensor[208], sae_tensor[201] ✓
-  ↓
-Final energy = model_output + SAE_correction
-```
-
-**Key Insight**: The compiled model provides a standard interface (normal atomic numbers in/out) while internally using shifted SAE storage for consistency with the training procedure.
-
-### Heterogeneous Labels
-
-Different datasets can have different available properties:
-
-| Dataset | energy | forces | charges | spin | mult |
-|---------|--------|--------|---------|------|------|
-| Fid0    | ✓      | ✓      | ✓       | ✓    | ✓    |
-| Fid1    | ✓      | ✓      | ✓       | ✗    | ✗    |
-| Fid2    | ✓      | ✗      | ✗       | ✓    | ✗    |
-
-The collate function automatically creates masks, and loss functions skip missing labels.
-
-### Self-Atomic Energy (SAE)
-
-Removes atomic baseline energies before training:
-
-```bash
-# Calculate SAE for each dataset
-python -m aimnet2mult.train.calc_sae dataset.h5 sae.yaml
-```
-
-SAE is applied during data loading: `E_corrected = E_raw - Σ SAE[atom_i]`
-
+View your runs at: https://wandb.ai/your-username/your-project
 
 ## License
 
 MIT License - Copyright (c) 2025 AIMNet2Mult Contributors
 
 See [LICENSE](LICENSE) file for full details.
-

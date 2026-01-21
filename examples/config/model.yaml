@@ -1,0 +1,70 @@
+# Model Configuration
+# AIMNet2 multi-fidelity model
+
+class: aimnet2mult.models.aimnet2.AIMNet2
+
+kwargs:
+  # Feature dimensions
+  nfeature: 128
+  d2features: true
+  ncomb_v: 8
+  hidden:
+    - [128, 128]
+    - [128, 128]
+    - [128, 128]
+
+  # AIM representation size
+  aim_size: 128
+
+  # Atomic Environment Vector (AEV) settings
+  aev:
+    rc_s: 5.0
+    nshifts_s: 16
+
+  # Output heads
+  outputs:
+    energy_mlp:
+      class: aimnet2mult.modules.Output
+      kwargs:
+        n_in: 128
+        n_out: 1
+        key_in: aim
+        key_out: energy
+        mlp:
+          hidden: [64, 64]
+          activation_fn: torch.nn.GELU
+
+    atomic_shift:
+      class: aimnet2mult.modules.AtomicShift
+      kwargs:
+        key_in: energy
+        key_out: energy
+        num_types: 64
+
+    atomic_sum:
+      class: aimnet2mult.modules.AtomicSum
+      kwargs:
+        key_in: energy
+        key_out: energy
+
+    charges:
+      class: aimnet2mult.modules.Output
+      kwargs:
+        n_in: 128
+        n_out: 1
+        key_in: aim
+        key_out: charges
+        mlp:
+          hidden: [64]
+          activation_fn: torch.nn.GELU
+
+    spin_charges:
+      class: aimnet2mult.modules.Output
+      kwargs:
+        n_in: 128
+        n_out: 1
+        key_in: aim
+        key_out: spin_charges
+        mlp:
+          hidden: [64]
+          activation_fn: torch.nn.GELU

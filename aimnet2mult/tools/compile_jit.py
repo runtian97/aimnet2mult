@@ -1,38 +1,53 @@
 """
-Compile trained fidelity-specific model to TorchScript JIT with SAE.
+Compile trained fidelity-specific model to TorchScript JIT with SAE and Dispersion.
 
 This script:
 1. Loads the trained model checkpoint
 2. Wraps it with SAE addition layer
-3. Compiles to TorchScript JIT format for deployment
+3. Optionally adds dispersion correction (D3BJ or D4) embedded in the model
+4. Compiles to TorchScript JIT format for deployment
+
+The compiled model can be used with:
+- torch.jit.load() for direct PyTorch usage
+- ASE calculator for molecular dynamics
 """
 
+import os
 import yaml
 import torch
 import torch.nn as nn
-import warnings
-from functools import partial
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
-from aimnet2mult.models.mixed_fidelity_aimnet2 import MixedFidelityAIMNet2
-from ..utils.units import (
-    HARTREE_TO_EV,
-    FORCE_HARTREE_BOHR_TO_EV_ANGSTROM,
-)
 
-from torch.jit._trace import TracerWarning
+# D3BJ parameters for common functionals
+# Reference: https://www.chemie.uni-bonn.de/pctc/mulliken-center/software/dft-d3/functionalsbj
+D3BJ_PARAMS = {
+    'b3lyp': {'s8': 1.9889, 'a1': 0.3981, 'a2': 4.4211, 's6': 1.0},
+    'pbe': {'s8': 0.7875, 'a1': 0.4289, 'a2': 4.4407, 's6': 1.0},
+    'pbe0': {'s8': 1.2177, 'a1': 0.4145, 'a2': 4.8593, 's6': 1.0},
+    'wb97x': {'s8': 0.0000, 'a1': 0.0000, 'a2': 5.4959, 's6': 1.0},
+    'wb97m': {'s8': 0.3908, 'a1': 0.5660, 'a2': 3.1280, 's6': 1.0},
+    'tpss': {'s8': 1.9435, 'a1': 0.4535, 'a2': 4.4752, 's6': 1.0},
+    'bp86': {'s8': 3.2822, 'a1': 0.3946, 'a2': 4.8516, 's6': 1.0},
+    'm062x': {'s8': 0.0000, 'a1': 0.0000, 'a2': 5.0580, 's6': 1.0},
+    'b973c': {'s8': 1.5000, 'a1': 0.3700, 'a2': 4.1000, 's6': 1.0},
+}
+
+
+def get_d3bj_params(functional: str) -> Dict[str, float]:
+    """Get D3BJ parameters for a functional."""
+    func_lower = functional.lower().replace('-', '').replace('_', '')
+    if func_lower in D3BJ_PARAMS:
+        return D3BJ_PARAMS[func_lower].copy()
+    for key in D3BJ_PARAMS:
+        if func_lower in key or key in func_lower:
+            return D3BJ_PARAMS[key].copy()
+    available = ', '.join(D3BJ_PARAMS.keys())
+    raise ValueError(f"Unknown functional '{functional}'. Available: {available}")
 
 
 class FidelityModelWithSAE(nn.Module):
-    """
-    Scriptable wrapper that adds SAE to model predictions.
-
-    This wrapper preserves the model's ability to handle both:
-    - 3D batched input: [batch, atoms, 3] (for direct use)
-    - 2D flattened input: [total_atoms, 3] (for AIMNet2Calculator)
-
-    The base model's prepare_input handles the format conversion.
-    """
+    """TorchScript-compatible wrapper with SAE only (no dispersion)."""
 
     __constants__ = ['fidelity_level', 'fidelity_offset']
 
@@ -53,7 +68,6 @@ class FidelityModelWithSAE(nn.Module):
         if not sae:
             raise ValueError(f"SAE dictionary is empty for fidelity {fidelity_level}")
 
-        # Convert SAE dict to tensor
         max_z = max(sae.keys()) if sae else 118
         tensor_size = max(max_z + 1, 119, (fidelity_level + 1) * fidelity_offset + 118)
         sae_tensor = torch.zeros(tensor_size, dtype=torch.float32)
@@ -61,49 +75,26 @@ class FidelityModelWithSAE(nn.Module):
             shifted_z = int(z) + fidelity_level * fidelity_offset
             sae_tensor[shifted_z] = energy
         self.register_buffer('sae_tensor', sae_tensor)
-
-        # Store cutoff values as buffers for TorchScript
         self.register_buffer('_cutoff', torch.tensor(cutoff, dtype=torch.float32))
         self.register_buffer('_cutoff_lr', torch.tensor(cutoff_lr, dtype=torch.float32))
-
-        # Store as Python float attributes (aimnet2calc expects floats, not tensors)
-        # TorchScript will preserve these as constants
         self.cutoff: float = cutoff
         self.cutoff_lr: float = cutoff_lr
 
     def forward(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        # Add fidelity labels if not present
         if '_fidelities' not in data:
-            # Determine batch size from charge
             charge = data['charge']
-            if charge.dim() == 0:
-                batch_size = 1
-            else:
-                batch_size = charge.size(0)
-
-            # Create fidelity tensor
-            fidelities = torch.full(
-                (batch_size,),
-                self.fidelity_level,
-                dtype=torch.long,
-                device=charge.device
-            )
-            # Add to data dict
-            data = dict(data)  # Make a copy to avoid mutating input
+            batch_size = 1 if charge.dim() == 0 else charge.size(0)
+            fidelities = torch.full((batch_size,), self.fidelity_level, dtype=torch.long, device=charge.device)
+            data = dict(data)
             data['_fidelities'] = fidelities
 
-        # Pass data to model (it handles prepare_input for format conversion)
         output = self.model(data)
 
-        # Add SAE correction to energy
-        # Note: Input atomic numbers are NORMAL (1-118), but SAE tensor uses SHIFTED indices
         numbers = data['numbers']
         shifted_numbers = numbers + self.fidelity_level * self.fidelity_offset
         sae_per_atom = self.sae_tensor[shifted_numbers]
 
-        # Aggregate SAE by molecule
         if 'mol_idx' in data:
-            # Flattened format from AIMNet2Calculator
             mol_idx = data['mol_idx']
             batch_size = int(mol_idx.max().item()) + 1
             sae_energy = torch.zeros(batch_size, dtype=sae_per_atom.dtype, device=sae_per_atom.device)
@@ -111,210 +102,331 @@ class FidelityModelWithSAE(nn.Module):
                 mask = (mol_idx == i)
                 sae_energy[i] = sae_per_atom[mask].sum()
         else:
-            # Direct 3D format
             if sae_per_atom.dim() == 1:
-                # Single flattened molecule
                 sae_energy = sae_per_atom.sum().unsqueeze(0)
             else:
-                # Batched: [batch, atoms]
                 sae_energy = sae_per_atom.sum(dim=-1)
 
-        # Add to output energy
-        output = dict(output)  # Make a copy
+        output = dict(output)
         output['energy'] = output['energy'] + sae_energy
+        return output
+
+
+class FidelityModelWithSAEAndDispersion(nn.Module):
+    """
+    TorchScript-compatible wrapper with SAE and D3BJ dispersion embedded.
+
+    The dispersion is computed using the internal DFTD3 module which is
+    TorchScript compatible. The model can be loaded with torch.jit.load()
+    and used directly.
+    """
+
+    __constants__ = ['fidelity_level', 'fidelity_offset', 'has_dispersion']
+
+    def __init__(
+        self,
+        model: nn.Module,
+        sae: Dict[int, float],
+        fidelity_level: int,
+        fidelity_offset: int = 200,
+        cutoff: float = 5.0,
+        cutoff_lr: float = float('inf'),
+        dispersion_module: Optional[nn.Module] = None
+    ):
+        super().__init__()
+        self.model = model
+        self.fidelity_level = fidelity_level
+        self.fidelity_offset = fidelity_offset
+
+        if not sae:
+            raise ValueError(f"SAE dictionary is empty for fidelity {fidelity_level}")
+
+        max_z = max(sae.keys()) if sae else 118
+        tensor_size = max(max_z + 1, 119, (fidelity_level + 1) * fidelity_offset + 118)
+        sae_tensor = torch.zeros(tensor_size, dtype=torch.float32)
+        for z, energy in sae.items():
+            shifted_z = int(z) + fidelity_level * fidelity_offset
+            sae_tensor[shifted_z] = energy
+        self.register_buffer('sae_tensor', sae_tensor)
+        self.register_buffer('_cutoff', torch.tensor(cutoff, dtype=torch.float32))
+        self.register_buffer('_cutoff_lr', torch.tensor(cutoff_lr, dtype=torch.float32))
+        self.cutoff: float = cutoff
+        self.cutoff_lr: float = cutoff_lr
+
+        self.dispersion = dispersion_module
+        self.has_dispersion: bool = dispersion_module is not None
+
+    def forward(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        if '_fidelities' not in data:
+            charge = data['charge']
+            batch_size = 1 if charge.dim() == 0 else charge.size(0)
+            fidelities = torch.full((batch_size,), self.fidelity_level, dtype=torch.long, device=charge.device)
+            data = dict(data)
+            data['_fidelities'] = fidelities
+
+        # Run model - this sets up neighbor lists needed for dispersion
+        output = self.model(data)
+
+        # Add SAE correction
+        numbers = data['numbers']
+        shifted_numbers = numbers + self.fidelity_level * self.fidelity_offset
+        sae_per_atom = self.sae_tensor[shifted_numbers]
+
+        if 'mol_idx' in data:
+            mol_idx = data['mol_idx']
+            batch_size = int(mol_idx.max().item()) + 1
+            sae_energy = torch.zeros(batch_size, dtype=sae_per_atom.dtype, device=sae_per_atom.device)
+            for i in range(batch_size):
+                mask = (mol_idx == i)
+                sae_energy[i] = sae_per_atom[mask].sum()
+        else:
+            if sae_per_atom.dim() == 1:
+                sae_energy = sae_per_atom.sum().unsqueeze(0)
+            else:
+                sae_energy = sae_per_atom.sum(dim=-1)
+
+        output = dict(output)
+        output['energy'] = output['energy'] + sae_energy
+
+        # Add dispersion if configured
+        if self.has_dispersion and self.dispersion is not None:
+            # Pass the data dict (with neighbor lists from model) to dispersion
+            # The dispersion module adds to 'energy' key
+            disp_data = dict(data)
+            disp_data['energy'] = output['energy']
+            disp_data = self.dispersion(disp_data)
+            output['energy'] = disp_data['energy']
 
         return output
 
 
-def compile_model_with_sae(checkpoint_path: str, output_prefix: str, model_config: Dict, fidelity_level: Optional[int] = None, train_cfg: Optional[Dict] = None):
+def compile_model(
+    checkpoint_path: str,
+    output_prefix: str,
+    model_config: Dict,
+    fidelity_level: int,
+    fidelity_offset: int,
+    num_fidelities: int,
+    use_fidelity_readouts: bool,
+    sae: Dict[int, float],
+    dispersion_type: str = 'none',
+    dispersion_functional: Optional[str] = None,
+    dispersion_params: Optional[Dict[str, float]] = None
+):
     """
-    Compile model with SAE to TorchScript.
+    Compile a single fidelity model to TorchScript JIT with dispersion embedded.
 
     Args:
-        checkpoint_path: Path to saved checkpoint (.pt file)
-        output_prefix: Prefix for output files (will append _fid{N}.pt)
-        model_config: Model architecture configuration
-        fidelity_level: If specified, only compile for this fidelity. Otherwise compile all.
-        train_cfg: The training configuration.
+        checkpoint_path: Path to trained model checkpoint
+        output_prefix: Output path prefix (will add _fid{N}.jpt)
+        model_config: Model architecture configuration dict
+        fidelity_level: Fidelity level to compile
+        fidelity_offset: Atomic number offset per fidelity
+        num_fidelities: Total number of fidelities
+        use_fidelity_readouts: Whether model uses fidelity-specific readouts
+        sae: SAE dictionary {atomic_number: energy}
+        dispersion_type: 'd3bj', 'd4', or 'none'
+        dispersion_functional: Functional name for predefined params (e.g., 'pbe', 'wb97m')
+        dispersion_params: Custom dispersion parameters (overrides functional)
     """
-    print(f"Loading checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    print(checkpoint.keys())
+    from ..config import build_module
+    from ..modules import DFTD3
 
-    # Extract components
-    state_dict = checkpoint['model']
-    num_fidelities = len(train_cfg.data.fidelity_datasets)
-    fidelity_offset = train_cfg.get('fidelity_offset', 200)
-    use_fidelity_readouts = train_cfg.get('use_fidelity_readouts', True)
-
-    # Load SAE from file
-    with open(args.sae, 'r') as f:
-        sae_per_fidelity = {fidelity_level: yaml.safe_load(f)}
-
-    print(f"Model configuration:")
-    print(f"  Fidelities: {num_fidelities}")
-    print(f"  Fidelity offset: {fidelity_offset}")
-    print(f"  Fidelity readouts enabled: {use_fidelity_readouts}")
-    for fid, sae_map in sae_per_fidelity.items():
-        print(f"  Fidelity {fid} SAE entries: {len(sae_map)}")
-
-    # Determine which fidelities to compile
-    if fidelity_level is not None:
-        fidelities_to_compile = [fidelity_level]
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    if isinstance(checkpoint, dict):
+        state_dict = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
     else:
-        fidelities_to_compile = list(range(num_fidelities))
+        state_dict = checkpoint.state_dict()
 
-    compiled_models = {}
+    base_model = build_module(model_config)
+    base_num_elements = base_model.afv.weight.shape[0]
+    z_offset = fidelity_level * fidelity_offset
 
-    for fid in fidelities_to_compile:
-        print(f"\nCompiling model for fidelity {fid}...")
-        if fid not in sae_per_fidelity:
-            raise ValueError(f"No SAE data available for fidelity {fid}")
-
-        # Build a SINGLE-FIDELITY base model (no fidelity readouts) for JIT compatibility
-        print(f"  Building single-fidelity base model (JIT-compatible)...")
-        from ..config import build_module
-        base_model = build_module(model_config)
-
-        # Load weights from the mixed-fidelity model
-        # Need to map fidelity-offset atomic numbers back to standard numbers
-        # The mixed-fidelity model uses offset atomic numbers: fidelity N uses Z + N*offset
-        # We need to extract rows from the offset range and pack them into standard Z range
-
-        # Get the expected size from the base model
-        base_num_elements = base_model.afv.weight.shape[0]  # Usually 64 or 119
-        z_offset = fid * fidelity_offset
-
-        print(f"  Base model expects {base_num_elements} elements, extracting from offset {z_offset}")
-
-        base_state_dict = {}
-        for key, value in state_dict.items():
-            # Skip fidelity-specific readout layers
-            if key.startswith('shared_readout.') or key.startswith('fidelity_readouts.'):
-                continue
-            # Handle embedding weights (afv.weight) - extract fidelity-specific slice
-            elif key == 'afv.weight':
-                # Extract rows for this fidelity's atomic numbers (z_offset to z_offset+base_num_elements)
+    # Extract weights for this fidelity
+    base_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith('shared_readout.') or key.startswith('fidelity_readouts.'):
+            continue
+        elif key == 'afv.weight':
+            if value.shape[0] > z_offset + base_num_elements:
                 base_state_dict[key] = value[z_offset:z_offset+base_num_elements, :].clone()
-            # Copy all other weights directly (outputs will be handled separately)
             else:
-                base_state_dict[key] = value
-
-        # For outputs, use the fidelity-specific readout if available
-        if f'fidelity_readouts.{fid}.energy_mlp.mlp.0.weight' in state_dict:
-            print(f"  Using fidelity-specific readout for fidelity {fid}")
-            for key in list(state_dict.keys()):
-                if key.startswith(f'fidelity_readouts.{fid}.'):
-                    new_key = key.replace(f'fidelity_readouts.{fid}.', 'outputs.')
-                    value = state_dict[key]
-                    # Extract fidelity-specific slice for atomic shifts
-                    if 'atomic_shift.shifts.weight' in key:
-                        base_state_dict[new_key] = value[z_offset:z_offset+base_num_elements, :].clone()
-                    else:
-                        base_state_dict[new_key] = value
-        elif 'shared_readout.energy_mlp.mlp.0.weight' in state_dict:
-            print(f"  Using shared readout")
-            for key in list(state_dict.keys()):
-                if key.startswith('shared_readout.'):
-                    new_key = key.replace('shared_readout.', 'outputs.')
-                    value = state_dict[key]
-                    # Extract fidelity-specific slice for atomic shifts
-                    if 'atomic_shift.shifts.weight' in key:
-                        base_state_dict[new_key] = value[z_offset:z_offset+base_num_elements, :].clone()
-                    else:
-                        base_state_dict[new_key] = value
-
-        base_model.load_state_dict(base_state_dict)
-        base_model.eval()
-
-        # Extract cutoff from model config
-        if isinstance(model_config, dict):
-            if 'kwargs' in model_config and 'aev' in model_config['kwargs']:
-                cutoff = model_config['kwargs']['aev'].get('rc_s', 5.0)
-            elif 'aev' in model_config:
-                cutoff = model_config['aev'].get('rc_s', 5.0)
+                base_state_dict[key] = value[:base_num_elements, :].clone()
+        elif 'atomic_shift.shifts.weight' in key:
+            target_size = base_model.outputs.atomic_shift.shifts.weight.shape[0]
+            if value.shape[0] > z_offset + target_size:
+                base_state_dict[key] = value[z_offset:z_offset+target_size, :].clone()
             else:
-                cutoff = 5.0  # Default
+                base_state_dict[key] = value[:target_size, :].clone()
         else:
-            cutoff = 5.0  # Default
+            base_state_dict[key] = value
 
-        # Wrap with SAE
-        print(f"  Wrapping model with SAE (cutoff={cutoff})...")
+    # Load fidelity-specific readouts
+    atomic_shift_target_size = base_model.outputs.atomic_shift.shifts.weight.shape[0]
+    if use_fidelity_readouts and f'fidelity_readouts.{fidelity_level}.energy_mlp.mlp.0.weight' in state_dict:
+        for key in list(state_dict.keys()):
+            if key.startswith(f'fidelity_readouts.{fidelity_level}.'):
+                new_key = key.replace(f'fidelity_readouts.{fidelity_level}.', 'outputs.')
+                value = state_dict[key]
+                if 'atomic_shift.shifts.weight' in key:
+                    if value.shape[0] > z_offset + atomic_shift_target_size:
+                        base_state_dict[new_key] = value[z_offset:z_offset+atomic_shift_target_size, :].clone()
+                    else:
+                        base_state_dict[new_key] = value[:atomic_shift_target_size, :].clone()
+                else:
+                    base_state_dict[new_key] = value
+    elif 'shared_readout.energy_mlp.mlp.0.weight' in state_dict:
+        for key in list(state_dict.keys()):
+            if key.startswith('shared_readout.'):
+                new_key = key.replace('shared_readout.', 'outputs.')
+                value = state_dict[key]
+                if 'atomic_shift.shifts.weight' in key:
+                    if value.shape[0] > z_offset + atomic_shift_target_size:
+                        base_state_dict[new_key] = value[z_offset:z_offset+atomic_shift_target_size, :].clone()
+                    else:
+                        base_state_dict[new_key] = value[:atomic_shift_target_size, :].clone()
+                else:
+                    base_state_dict[new_key] = value
+
+    try:
+        base_model.load_state_dict(base_state_dict, strict=True)
+    except RuntimeError:
+        base_model.load_state_dict(base_state_dict, strict=False)
+
+    base_model.eval()
+
+    if isinstance(model_config, dict):
+        cutoff = model_config.get('kwargs', {}).get('aev', {}).get('rc_s', 5.0)
+    else:
+        cutoff = 5.0
+
+    # Build dispersion module
+    dispersion_module = None
+    if dispersion_type == 'd3bj':
+        if dispersion_params:
+            params = dispersion_params
+        elif dispersion_functional:
+            params = get_d3bj_params(dispersion_functional)
+        else:
+            raise ValueError("D3BJ requires --dispersion-functional or explicit params")
+
+        dispersion_module = DFTD3(
+            s8=params['s8'],
+            a1=params['a1'],
+            a2=params['a2'],
+            s6=params.get('s6', 1.0),
+            key_out='energy'
+        )
+    elif dispersion_type == 'd4':
+        raise NotImplementedError(
+            "D4 dispersion is not yet implemented as an embedded module. "
+            "Use d3bj or handle D4 at inference time with dftd4 package."
+        )
+
+    # Create wrapped model
+    if dispersion_module is not None:
+        model_with_sae = FidelityModelWithSAEAndDispersion(
+            base_model, sae, fidelity_level, fidelity_offset,
+            cutoff=cutoff, cutoff_lr=float('inf'),
+            dispersion_module=dispersion_module
+        ).eval()
+    else:
         model_with_sae = FidelityModelWithSAE(
-            base_model,  # Pass base model, not mixed-fidelity model
-            sae_per_fidelity[fid],
-            fid,
-            fidelity_offset,
-            cutoff=cutoff,
-            cutoff_lr=float('inf')
+            base_model, sae, fidelity_level, fidelity_offset,
+            cutoff=cutoff, cutoff_lr=float('inf')
         ).eval()
 
-        # Save as TorchScript JIT model
-        if output_prefix.endswith('.pt'):
-            output_path = output_prefix[:-3] + f'_fid{fid}.jpt'
-        elif output_prefix.endswith('.jpt'):
-            output_path = output_prefix[:-4] + f'_fid{fid}.jpt'
-        else:
-            output_path = output_prefix + f'_fid{fid}.jpt'
+    # Save paths
+    if output_prefix.endswith('.pt') or output_prefix.endswith('.jpt'):
+        output_prefix = output_prefix.rsplit('.', 1)[0]
+    output_path = f"{output_prefix}_fid{fidelity_level}.jpt"
 
-        print(f"  Saving TorchScript model to {output_path}")
-        try:
-            # Script the model directly - no eager format needed
-            scripted = torch.jit.script(model_with_sae)
-            scripted.save(output_path)
-            print(f"  ✓ Saved TorchScript model (loadable with torch.jit.load)")
-        except Exception as e:
-            print(f"  ERROR: Could not create TorchScript version: {e}")
-            print(f"  Falling back to eager model format...")
-            # Fallback: save eager model with metadata
-            save_dict = {
-                'model_state_dict': model_with_sae.state_dict(),
-                'sae': sae_per_fidelity[fid],
-                'fidelity_level': fid,
-                'fidelity_offset': fidelity_offset,
-                'num_fidelities': num_fidelities,
-                'use_fidelity_readouts': False,  # Base model doesn't use readouts
-                'model_config': model_config,
-                'cutoff': cutoff,
-                'cutoff_lr': float('inf'),
-                'eager_model': True
+    try:
+        scripted = torch.jit.script(model_with_sae)
+        scripted.save(output_path)
+
+        # Save metadata
+        metadata = {
+            'fidelity_level': fidelity_level,
+            'fidelity_offset': fidelity_offset,
+            'num_fidelities': num_fidelities,
+            'sae': sae,
+            'cutoff': cutoff,
+            'dispersion': {
+                'type': dispersion_type,
+                'functional': dispersion_functional,
+                'params': dispersion_params if dispersion_params else (
+                    get_d3bj_params(dispersion_functional) if dispersion_type == 'd3bj' and dispersion_functional else None
+                ),
+                'embedded': dispersion_type != 'none'
             }
-            torch.save(save_dict, output_path)
+        }
+        metadata_path = f"{output_prefix}_fid{fidelity_level}_meta.yaml"
+        with open(metadata_path, 'w') as f:
+            yaml.dump(metadata, f, default_flow_style=False)
 
-        compiled_models[fid] = model_with_sae
-
-    print("\nCompilation complete!")
-    print(f"Created {len(compiled_models)} JIT model(s)")
-    return compiled_models
+    except Exception as e:
+        fallback_path = f"{output_prefix}_fid{fidelity_level}.pt"
+        torch.save({
+            'model_state_dict': model_with_sae.state_dict(),
+            'sae': sae,
+            'fidelity_level': fidelity_level,
+            'fidelity_offset': fidelity_offset,
+            'cutoff': cutoff,
+            'dispersion_type': dispersion_type,
+            'dispersion_functional': dispersion_functional,
+            'eager_model': True,
+            'error': str(e)
+        }, fallback_path)
+        raise
 
 
 if __name__ == '__main__':
     import argparse
     from omegaconf import OmegaConf
 
-    parser = argparse.ArgumentParser(description='Compile fidelity-specific model to JIT with SAE')
-    parser.add_argument('--weights', type=str, required=True, help='Path to model weights to load.')
-    parser.add_argument('--model', type=str, required=True, help='Path to model definition file.')
-    parser.add_argument('--output', type=str, required=True, help='Path to save final model weights.')
-    parser.add_argument('--fidelity-level', type=int, required=True, help='Fidelity level to compile.')
-    parser.add_argument('--fidelity-offset', type=int, required=True, help='Offset for fidelity levels.')
-    parser.add_argument('--num-fidelities', type=int, required=True, help='Total number of fidelities.')
-    parser.add_argument('--use-fidelity-readouts', type=bool, default=True, help='Whether fidelity readouts are used.')
-    parser.add_argument('--sae', type=str, required=True, help='Path to SAE file.')
-    parser.add_argument('--train-config', type=str, required=False, help='Path to the training config file (deprecated).')
+    parser = argparse.ArgumentParser(description='Compile fidelity model to JIT with SAE and Dispersion')
+    parser.add_argument('--weights', type=str, required=True, help='Path to model weights')
+    parser.add_argument('--model', type=str, required=True, help='Path to model config')
+    parser.add_argument('--output', type=str, required=True, help='Output path prefix')
+    parser.add_argument('--fidelity-level', type=int, required=True, help='Fidelity level')
+    parser.add_argument('--fidelity-offset', type=int, default=200, help='Fidelity offset')
+    parser.add_argument('--num-fidelities', type=int, required=True, help='Number of fidelities')
+    parser.add_argument('--use-fidelity-readouts', type=str, default='True', help='Use fidelity readouts')
+    parser.add_argument('--sae', type=str, required=True, help='Path to SAE file')
+
+    # Dispersion arguments
+    parser.add_argument('--dispersion', type=str, default='none', choices=['none', 'd3bj', 'd4'],
+                       help='Dispersion type to embed in model')
+    parser.add_argument('--dispersion-functional', type=str, default=None,
+                       help='Functional name for D3BJ params (e.g., pbe, b3lyp, wb97m)')
+    parser.add_argument('--dispersion-s8', type=float, default=None, help='D3BJ s8 parameter')
+    parser.add_argument('--dispersion-a1', type=float, default=None, help='D3BJ a1 parameter')
+    parser.add_argument('--dispersion-a2', type=float, default=None, help='D3BJ a2 parameter')
+    parser.add_argument('--dispersion-s6', type=float, default=1.0, help='D3BJ s6 parameter')
 
     args = parser.parse_args()
 
-    # Load model config
     model_cfg = OmegaConf.load(args.model)
     model_cfg = OmegaConf.to_container(model_cfg)
 
-    # Create minimal train config from args
-    train_cfg = OmegaConf.create({
-        'data': {'fidelity_datasets': {i: '' for i in range(args.num_fidelities)}},
-        'fidelity_offset': args.fidelity_offset,
-        'use_fidelity_readouts': args.use_fidelity_readouts
-    })
+    with open(args.sae, 'r') as f:
+        sae = yaml.safe_load(f)
 
-    # Compile
-    compile_model_with_sae(args.weights, args.output, model_cfg, args.fidelity_level, train_cfg)
+    use_fidelity_readouts = args.use_fidelity_readouts.lower() in ('true', '1', 'yes')
+
+    # Build custom params if provided
+    dispersion_params = None
+    if args.dispersion == 'd3bj' and args.dispersion_s8 is not None:
+        dispersion_params = {
+            's8': args.dispersion_s8,
+            'a1': args.dispersion_a1,
+            'a2': args.dispersion_a2,
+            's6': args.dispersion_s6
+        }
+
+    compile_model(
+        args.weights, args.output, model_cfg, args.fidelity_level,
+        args.fidelity_offset, args.num_fidelities, use_fidelity_readouts,
+        sae, args.dispersion, args.dispersion_functional, dispersion_params
+    )

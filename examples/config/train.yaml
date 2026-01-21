@@ -92,7 +92,7 @@ optimizer:
       lr: 0.000025
       weight_decay: 0.0
     shifts:
-      re: '.*.atomic_shift.shifts.weight$'
+      re: '.*.atomic_shift.shifts.weight'
       weight_decay: 0.0
 
 # Learning rate scheduler
@@ -110,10 +110,10 @@ trainer:
 
 # Logging frequency (iterations)
 log_frequency:
-  train: 10           # Log train loss + RMSE every 10 iterations
-  val: 10             # Run validation every 10 iterations
+  train: 10
+  val: 10
 
-# Checkpointing
+# Checkpointing - dirname will be overridden via CLI or defaults to ./checkpoints
 checkpoint:
   dirname: checkpoints
   filename_prefix: ${run_name}

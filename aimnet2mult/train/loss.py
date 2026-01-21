@@ -120,8 +120,11 @@ def _apply_sample_mask(values: Tensor, mask: Tensor) -> Tensor:
 
 
 def mse_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str) -> Tensor:
-    """ General MSE loss function
+    """ General MSE loss function.
+    Returns zero loss if the key is missing from y_true (masked out entirely).
     """
+    if key_true not in y_true:
+        return torch.zeros((), device=y_pred[key_pred].device, dtype=y_pred[key_pred].dtype)
     x = y_true[key_true]
     y = y_pred[key_pred]
     mask = _get_sample_mask(y_true, key_true, x)
@@ -136,9 +139,19 @@ def mse_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: 
 def peratom_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str) -> Tensor:
     """ MSE loss function with per-atom normalization correction.
     Suitable when some of the values are zero both in y_pred and y_true due to padding of inputs.
+    Returns zero loss if the key is missing from y_true (masked out entirely).
     """
+    if key_true not in y_true:
+        # Key not present in this batch - return zero loss
+        return torch.zeros((), device=y_pred[key_pred].device, dtype=y_pred[key_pred].dtype)
     x = y_true[key_true]
     y = y_pred[key_pred]
+
+    # Align shapes: squeeze trailing dimension if present in one but not the other
+    if x.dim() > y.dim() and x.shape[-1] == 1:
+        x = x.squeeze(-1)
+    elif y.dim() > x.dim() and y.shape[-1] == 1:
+        y = y.squeeze(-1)
 
     mask = _get_sample_mask(y_true, key_true, x)
     if y_pred['_natom'].numel() == 1:
@@ -161,7 +174,10 @@ def peratom_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pr
 
 def energy_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str = 'energy', key_true: str = 'energy') -> Tensor:
     """MSE loss normalized by the number of atoms.
+    Returns zero loss if the key is missing from y_true (masked out entirely).
     """
+    if key_true not in y_true:
+        return torch.zeros((), device=y_pred[key_pred].device, dtype=y_pred[key_pred].dtype)
     x = y_true[key_true]
     y = y_pred[key_pred]
     s = y_pred['_natom'].sqrt()

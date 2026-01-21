@@ -206,8 +206,8 @@ class MixedFidelityAIMNet2(AIMNet2):
             output_keys.update(fid_data.keys())
 
         # For each output key, select the right value for each molecule
-        # Only process known final outputs
-        allowed_keys = {'energy'}  # Only process total energy
+        # Process all final outputs (energy, charges, spin_charges)
+        allowed_keys = {'energy', 'charges', 'spin_charges'}
         for key in output_keys:
             if key not in allowed_keys:
                 # Skip everything except allowed final outputs

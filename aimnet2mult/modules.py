@@ -478,15 +478,15 @@ class DFTD3(nn.Module):
         # CN parameters
         self.k1 = - 16.0
         self.k3 = -4.0
-        # data
-        self.register_buffer('c6ab', torch.zeros(128, 128, 5, 5, 3))
-        self.register_buffer('r4r2', torch.zeros(128))
-        self.register_buffer('rcov', torch.zeros(128))
-        self.register_buffer('cnmax', torch.zeros(128))
+        # Load data file first to get dimensions
         if datafile is None:
-            datafile = os.path.join(os.path.dirname(__file__), 'd3bj_data.pt')    
-        sd = torch.load(datafile)
-        self.load_state_dict(sd)
+            datafile = os.path.join(os.path.dirname(__file__), 'd3bj_data.pt')
+        sd = torch.load(datafile, weights_only=True)
+        # Register buffers with correct sizes from data file
+        self.register_buffer('c6ab', sd['c6ab'])
+        self.register_buffer('r4r2', sd['r4r2'])
+        self.register_buffer('rcov', sd['rcov'])
+        self.register_buffer('cnmax', sd['cnmax'])
 
     def _calc_c6ij(self, data: Dict[str, Tensor]) -> Tensor:
         # CN part
