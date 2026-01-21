@@ -60,3 +60,5 @@ kwargs:
       kwargs:
         key_in: 'charges'
         key_out: 'energy'
+        method: 'simple'
+        rc: 4.6

@@ -219,6 +219,138 @@ The multi-fidelity AIMNet2 model uses a shared backbone with fidelity-specific r
 
 3. **Heterogeneous Label Masking**: Loss automatically masks missing labels per molecule
 
+### Gradient Flow with Heterogeneous Labels
+
+When training with multiple datasets where only some have certain labels (e.g., only Dataset 0 has charges/forces), understanding gradient flow is crucial.
+
+#### Architecture: Shared Backbone + Fidelity-Specific Readouts
+
+```
+                    ┌─────────────────────────────────────────────────────────┐
+                    │           SHARED MESSAGE PASSING BACKBONE               │
+                    │  ┌─────────────────────────────────────────────────┐   │
+  Dataset 0 ───────►│  │  Embedding → AEV → MP Iterations → `aim`        │   │
+  Dataset 1 ───────►│  │  (All datasets contribute gradients here)       │   │
+  Dataset 2 ───────►│  └─────────────────────────────────────────────────┘   │
+                    └───────────────────────┬─────────────────────────────────┘
+                                            │
+                                            ▼
+                    ┌─────────────────────────────────────────────────────────┐
+                    │         FIDELITY-SPECIFIC READOUT HEADS                 │
+                    │  ┌───────────┐  ┌───────────┐  ┌───────────┐           │
+                    │  │ Fidelity 0│  │ Fidelity 1│  │ Fidelity 2│           │
+                    │  │ energy ✓  │  │ energy ✓  │  │ energy ✓  │           │
+                    │  │ forces ✓  │  │ forces ✗  │  │ forces ✗  │           │
+                    │  │ charges ✓ │  │ charges ✗ │  │ charges ✗ │           │
+                    │  └───────────┘  └───────────┘  └───────────┘           │
+                    │  (Only trained    (No gradient   (No gradient          │
+                    │   on available     for forces/    for forces/          │
+                    │   labels)          charges)       charges)             │
+                    └─────────────────────────────────────────────────────────┘
+```
+
+#### How Missing Labels Are Masked
+
+**Step 1: Data Collation** (`aimnet2mult/data/collate.py`)
+
+When batching molecules, the collate function creates availability masks:
+
+```python
+# From collate.py lines 92-102
+for item in dict_list:
+    if key in item:
+        arr = np.asarray(item[key])
+        values.append(arr)
+        availability.append(1.0)   # Label present
+    else:
+        values.append(None)
+        availability.append(0.0)   # Label missing - will be masked
+```
+
+**Step 2: Loss Computation** (`aimnet2mult/train/loss.py`)
+
+The loss functions check for masks and return zero when labels are missing:
+
+```python
+# From loss.py lines 122-136
+def mse_loss_fn(y_pred, y_true, key_pred, key_true):
+    # If label completely missing from batch, return zero loss
+    if key_true not in y_true:
+        return torch.zeros((), device=y_pred[key_pred].device, dtype=y_pred[key_pred].dtype)
+
+    x = y_true[key_true]
+    y = y_pred[key_pred]
+    mask = _get_sample_mask(y_true, key_true, x)
+
+    if mask is None:
+        l = torch.nn.functional.mse_loss(x, y)
+    else:
+        # Per-sample masking: only molecules with labels contribute
+        diff2 = (x - y).pow(2).view(x.shape[0], -1).mean(dim=-1)
+        l = _apply_sample_mask(diff2, mask)
+    return l
+```
+
+**Step 3: Masked Averaging** (`aimnet2mult/train/loss.py`)
+
+```python
+# From loss.py lines 114-119
+def _apply_sample_mask(values: Tensor, mask: Tensor) -> Tensor:
+    mask = mask.squeeze(-1)
+    denom = mask.sum()
+    if denom.item() == 0:
+        return torch.zeros((), device=values.device, dtype=values.dtype)  # No valid samples
+    return (values * mask).sum() / denom  # Average only over valid samples
+```
+
+#### Gradient Flow Per Dataset
+
+| Dataset | Has Labels | Contributes to Backbone | Contributes to Readout |
+|---------|------------|------------------------|------------------------|
+| Dataset 0 | energy, forces, charges | ✓ (via all losses) | ✓ Fidelity 0 heads trained |
+| Dataset 1 | energy only | ✓ (via energy loss only) | ✓ Fidelity 1 energy head only |
+| Dataset 2 | energy only | ✓ (via energy loss only) | ✓ Fidelity 2 energy head only |
+
+#### Key Insight: Fidelity 0 Benefits Most
+
+**Fidelity 0's model gets the best of both worlds:**
+
+1. **Better backbone representations**: The shared message passing layers see molecules from ALL datasets, learning more diverse atomic environments
+
+2. **Fully trained readout heads**: Since Dataset 0 has all labels (energy, forces, charges, spin_charges), all its readout heads receive gradient updates
+
+3. **Richer training signal**: Forces and charges provide additional supervision that helps the backbone learn better atomic representations
+
+```
+Gradient contribution to shared backbone:
+
+  Dataset 0: ═══════════════════════════════════► (energy + forces + charges)
+  Dataset 1: ════════════►                        (energy only)
+  Dataset 2: ════════════►                        (energy only)
+             ─────────────────────────────────────
+             MORE molecular diversity, Dataset 0 readouts fully trained
+```
+
+**The other fidelities essentially "donate" their molecular diversity to improve the backbone, while only getting energy predictions in return.**
+
+#### Fidelity-Specific Readouts Are Independent
+
+Each fidelity creates its own set of readout heads (`aimnet2mult/models/mixed_fidelity_aimnet2.py`):
+
+```python
+# From mixed_fidelity_aimnet2.py lines 95-101
+for fid in range(self.num_fidelities):
+    # Each fidelity gets INDEPENDENT readout heads
+    fid_outputs = build_module(outputs_cfg)  # Creates NEW MLP weights
+    ...
+    self.fidelity_readouts[str(fid)] = nn.ModuleDict(fid_outputs)
+```
+
+This means:
+- Fidelity 1's charges head exists but is **never trained** (no gradient signal)
+- Fidelity 2's forces head exists but is **never trained** (no gradient signal)
+- Only heads with corresponding labels in their dataset receive gradient updates
+
 ### SAE + Atomic Number Offsets: Training, Compilation, Inference
 
 - **Training (mixed-fidelity)**:
@@ -370,6 +502,85 @@ Different fidelities can have different dispersion settings:
 
 # Fidelity 2: B3LYP-D3
 --fidelity-level 2 --dispersion d3bj --dispersion-functional b3lyp
+```
+
+## Long-Range Coulomb Energy
+
+The model includes a long-range Coulomb energy module (`LRCoulomb`) that computes electrostatic interactions from predicted atomic charges.
+
+### Configuration in `model.yaml`
+
+```yaml
+lrcoulomb:
+  class: aimnet2mult.modules.LRCoulomb
+  kwargs:
+    key_in: 'charges'
+    key_out: 'energy'
+    method: 'simple'    # Options: 'simple', 'dsf', 'ewald'
+    rc: 4.6             # Cutoff radius (Å) for simple method
+```
+
+### Available Methods
+
+| Method | Description | Use Case |
+|--------|-------------|----------|
+| `simple` | Exponential cutoff function | Isolated molecules, fast |
+| `dsf` | Damped Shifted Force | MD simulations, force continuity |
+| `ewald` | Full Ewald summation | Periodic systems, crystals |
+
+### Method Parameters
+
+**Simple method** (`aimnet2mult/modules.py` lines 277-288):
+```python
+def coul_simple(self, data):
+    fc = 1.0 - ops.exp_cutoff(d_ij, self.rc)  # Smooth cutoff
+    e_ij = fc * q_ij / d_ij                    # Coulomb energy
+```
+- `rc`: Cutoff radius (default: 4.6 Å)
+
+**DSF method** (`aimnet2mult/modules.py` lines 302-312):
+```python
+def coul_dsf(self, data):
+    epot = ops.coulomb_potential_dsf(q_j, d_ij, self.dsf_rc, self.dsf_alpha, data)
+    e = e - self.coul_simple_sr(data)  # Subtract short-range to avoid double counting
+```
+- `dsf_alpha`: Damping parameter (default: 0.2)
+- `dsf_rc`: DSF cutoff radius (default: 15.0 Å)
+
+**Ewald method** (`aimnet2mult/modules.py` lines 314-374):
+- Requires `cell` data (3x3 unit cell matrix)
+- Only works with `nb_mode == 1` (single molecule mode)
+- Computes real space + reciprocal space + self-interaction terms
+
+### Example Configurations
+
+```yaml
+# Default (simple method)
+lrcoulomb:
+  class: aimnet2mult.modules.LRCoulomb
+  kwargs:
+    key_in: 'charges'
+    key_out: 'energy'
+    method: 'simple'
+    rc: 4.6
+
+# DSF for MD simulations
+lrcoulomb:
+  class: aimnet2mult.modules.LRCoulomb
+  kwargs:
+    key_in: 'charges'
+    key_out: 'energy'
+    method: 'dsf'
+    dsf_alpha: 0.2
+    dsf_rc: 15.0
+
+# Ewald for periodic systems
+lrcoulomb:
+  class: aimnet2mult.modules.LRCoulomb
+  kwargs:
+    key_in: 'charges'
+    key_out: 'energy'
+    method: 'ewald'
 ```
 
 ## Data Format
