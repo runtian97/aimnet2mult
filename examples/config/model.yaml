@@ -1,20 +1,28 @@
 # Model Configuration
-# AIMNet2 multi-fidelity model
+# AIMNet2 model with NSE (Net Spin Excess) for open-shell systems
+#
+# Note: charges and spin_charges are predicted by the main model via
+# message passing + NSE constraint, NOT as separate output heads.
+# - charges: predicted iteratively, constrained to sum to molecular charge
+# - spin_charges: computed as (alpha - beta) in postprocessing
 
 class: aimnet2mult.models.aimnet2.AIMNet2
 
 kwargs:
   # Feature dimensions
-  nfeature: 128
+  nfeature: 16
   d2features: true
-  ncomb_v: 8
+  ncomb_v: 12
   hidden:
-    - [128, 128]
-    - [128, 128]
-    - [128, 128]
+    - [ 512, 380 ]
+    - [ 512, 380 ]
+    - [ 512, 380, 380 ]
 
   # AIM representation size
-  aim_size: 128
+  aim_size: 256
+
+  # Number of charge channels: 2 for open-shell (NSE mode)
+  num_charge_channels: 2
 
   # Atomic Environment Vector (AEV) settings
   aev:
@@ -26,45 +34,29 @@ kwargs:
     energy_mlp:
       class: aimnet2mult.modules.Output
       kwargs:
-        n_in: 128
+        n_in: 256
         n_out: 1
-        key_in: aim
-        key_out: energy
+        key_in: 'aim'
+        key_out: 'energy'
         mlp:
-          hidden: [64, 64]
           activation_fn: torch.nn.GELU
+          hidden: [128, 128]
+          last_linear: true
 
     atomic_shift:
       class: aimnet2mult.modules.AtomicShift
       kwargs:
-        key_in: energy
-        key_out: energy
-        num_types: 64
+        key_in: 'energy'
+        key_out: 'energy'
 
     atomic_sum:
       class: aimnet2mult.modules.AtomicSum
       kwargs:
-        key_in: energy
-        key_out: energy
+        key_in: 'energy'
+        key_out: 'energy'
 
-    charges:
-      class: aimnet2mult.modules.Output
+    lrcoulomb:
+      class: aimnet2mult.modules.LRCoulomb
       kwargs:
-        n_in: 128
-        n_out: 1
-        key_in: aim
-        key_out: charges
-        mlp:
-          hidden: [64]
-          activation_fn: torch.nn.GELU
-
-    spin_charges:
-      class: aimnet2mult.modules.Output
-      kwargs:
-        n_in: 128
-        n_out: 1
-        key_in: aim
-        key_out: spin_charges
-        mlp:
-          hidden: [64]
-          activation_fn: torch.nn.GELU
+        key_in: 'charges'
+        key_out: 'energy'
