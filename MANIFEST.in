@@ -1,4 +1,1 @@
-include LICENSE
-include README.md
-recursive-include aimnet2mult *.pt
-recursive-include aimnet2mult/config *.yaml *.yml
+include aimnet2mult/d3bj_data.pt
