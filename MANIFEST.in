@@ -1,1 +1,5 @@
 include aimnet2mult/d3bj_data.pt
+include aimnet2mult/config/*.yaml
+include aimnet2mult/config/*.yml
+include LICENSE
+include README.md
