@@ -1,0 +1,4 @@
+include LICENSE
+include README.md
+recursive-include aimnet2mult *.pt
+recursive-include aimnet2mult/config *.yaml *.yml

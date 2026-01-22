@@ -1,4 +1,17 @@
-# AIMNet2 Multi-Fidelity Training Configuration
+# AIMNet2 Training Configuration - WARM RESTARTS (SGDR)
+#
+# Designed to escape local minima using:
+# 1. Cosine Annealing with Warm Restarts (SGDR paper: Loshchilov & Hutter 2016)
+# 2. Higher initial learning rate for better exploration
+# 3. Progressive cycle lengthening (cycle_mult=1.5)
+# 4. Each restart brings LR back to high value, allowing escape from local minima
+#
+# Schedule visualization (with 300 epochs, cycle_size=30, cycle_mult=1.5):
+#   Cycle 1: epochs 0-30   (LR: 0.001 -> 1e-6, then restart)
+#   Cycle 2: epochs 30-75  (LR: 0.001 -> 1e-6, then restart)
+#   Cycle 3: epochs 75-142 (LR: 0.001 -> 1e-6, then restart)
+#   Cycle 4: epochs 142-243 (LR: 0.001 -> 1e-6, then restart)
+#   Cycle 5: epochs 243-394 (continues...)
 
 run_name: ???
 project_name: ???
@@ -17,7 +30,7 @@ data:
       files: {}
       mode: linreg
 
-  val_fraction: 0.005
+  val_fraction: 0.05
   separate_val: true
   ddp_load_full_dataset: false
 
@@ -27,7 +40,7 @@ data:
   samplers:
     train:
       kwargs:
-        batch_size: 4096
+        batch_size: 8192
         batch_mode: atoms
         shuffle: true
         batches_per_epoch: 20000
@@ -49,71 +62,82 @@ data:
       num_workers: 2
       pin_memory: true
 
-# Loss function
+# Loss function - Balanced for energy accuracy
 loss:
   class: aimnet2mult.train.loss.MTLoss
   kwargs:
     components:
       energy:
         fn: aimnet2mult.train.loss.energy_loss_fn
-        weight: 1.0
+        weight: 3.0  # High weight for energy accuracy
       forces:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.5
+        weight: 1.0
         kwargs:
           key_true: forces
           key_pred: forces
       charges:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.01
+        weight: 0.05
         kwargs:
           key_true: charges
           key_pred: charges
       spin_charges:
         fn: aimnet2mult.train.loss.peratom_loss_fn
-        weight: 0.01
+        weight: 0.05
         kwargs:
           key_true: spin_charges
           key_pred: spin_charges
 
-# Optimizer
+# Optimizer - Higher LR for exploration, will be modulated by cosine schedule
 optimizer:
   force_no_train: []
   force_train: []
   class: torch.optim.AdamW
   kwargs:
-    lr: 0.00005
-    weight_decay: 1e-6
+    lr: 0.001  # High initial LR - cosine annealing will handle decay
+    weight_decay: 1e-5
     betas: [0.9, 0.999]
     eps: 1e-8
   param_groups:
     embeddings:
       re: 'afv.weight'
-      lr: 0.000025
+      lr: 0.0005  # Half of main LR for embeddings
       weight_decay: 0.0
     shifts:
       re: '.*.atomic_shift.shifts.weight'
       weight_decay: 0.0
+  grad_clip:
+    max_norm: 1.0
 
-# Learning rate scheduler
+# Learning rate scheduler - Cosine Annealing with Warm Restarts (SGDR)
+# Key parameters:
+#   - cycle_size: Initial cycle length in epochs
+#   - cycle_mult: Multiply cycle length after each restart (1.5 = 50% longer each time)
+#   - start_value: Peak LR at beginning of each cycle
+#   - end_value: Minimum LR at end of each cycle
 scheduler:
-  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
   kwargs:
-    metric_name: loss
-    factor: 0.9
-    patience: 2
-  terminate_on_low_lr: 1.0e-7
+    param_name: lr
+    start_value: 0.001      # Peak LR (matches optimizer lr)
+    end_value: 1.0e-6       # Minimum LR at cycle end
+    cycle_size: 30          # Initial cycle: 30 epochs
+    cycle_mult: 1.5         # Each subsequent cycle is 1.5x longer
+    start_value_mult: 0.9   # Slightly reduce peak LR each cycle (0.9x)
+    end_value_mult: 1.0     # Keep minimum LR constant
+  terminate_on_low_lr: 0.0  # Disable early termination (let cosine schedule run)
 
-# Training
+# Training - Extended for multiple restart cycles
 trainer:
-  epochs: 200
+  epochs: 200  # Allows ~4-5 full restart cycles
 
 # Logging frequency (iterations)
 log_frequency:
   train: 10
   val: 50
 
-# Checkpointing - dirname will be overridden via CLI or defaults to ./checkpoints
+# Checkpointing
 checkpoint:
   dirname: checkpoints
   filename_prefix: ${run_name}

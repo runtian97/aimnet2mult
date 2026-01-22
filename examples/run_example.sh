@@ -1,22 +1,21 @@
 #!/bin/bash
 
 # Configuration
-RUN_NAME="aimnet2mult_example"
+RUN_NAME="aimnet2mult_01202026"
 PROJECT_NAME="aimnet2mult"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/config/train.yaml"
-MODEL_FILE="${SCRIPT_DIR}/config/model.yaml"
-DATA_DIR="${SCRIPT_DIR}/data"  # Set this to your data directory
-FIDELITY_0_DATASET="${DATA_DIR}/fidelity_0.h5"
-FIDELITY_1_DATASET="${DATA_DIR}/fidelity_1.h5"
-FIDELITY_2_DATASET="${DATA_DIR}/fidelity_2.h5"
+CONFIG_FILE="/projects/bbjt/rgao1/AIMNet2mult/YAML/train.yaml"
+MODEL_FILE="/projects/bbjt/rgao1/AIMNet2mult/YAML/model.yaml"
+DATA_DIR="/projects/bbjt/rgao1/AIMNet2mult/dataset"  # Set this to your data directory
+FIDELITY_0_DATASET="${DATA_DIR}/aimnet2_nse_nodispersion.h5"
+FIDELITY_1_DATASET="${DATA_DIR}/omol_25_4M_nodispersion.h5"
+FIDELITY_2_DATASET="${DATA_DIR}/ani1ccx_clean_ev.h5"
 FIDELITY_0_WEIGHT=1.0
 FIDELITY_1_WEIGHT=1.0
 FIDELITY_2_WEIGHT=1.0
 SAE_FID0="${DATA_DIR}/sae_fid0.yaml"
 SAE_FID1="${DATA_DIR}/sae_fid1.yaml"
 SAE_FID2="${DATA_DIR}/sae_fid2.yaml"
-OUTPUT_DIR="${SCRIPT_DIR}/output"
+OUTPUT_DIR="/projects/bbjt/rgao1/AIMNet2mult/01202026"
 SAVE_PATH="${OUTPUT_DIR}/model.pt"
 OUTPUT_PREFIX="${OUTPUT_DIR}/compiled/model"
 NUM_FIDELITIES=3
@@ -25,11 +24,11 @@ USE_FIDELITY_READOUTS=true
 
 # Dispersion settings per fidelity (none, d3bj, d4)
 DISP_FID0="d3bj"
-DISP_FID1="none"
-DISP_FID2="d3bj"
+DISP_FID1="d3bj"
+DISP_FID2="none"
 FUNC_FID0="wb97m"
-FUNC_FID1=""
-FUNC_FID2="wb97m"
+FUNC_FID1="wb97m"
+FUNC_FID2=""
 
 mkdir -p "${OUTPUT_DIR}/compiled"
 
