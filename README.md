@@ -14,17 +14,35 @@ A PyTorch implementation of AIMNet2 with **mixed-fidelity training** and **per-f
 
 ## Installation
 
+### From GitHub (recommended)
+
+```bash
+pip install git+https://github.com/runtian97/aimnet2mult.git
+```
+
+### From source (for development)
+
 ```bash
 git clone https://github.com/runtian97/aimnet2mult.git
 cd aimnet2mult
 pip install -e .
+```
 
-# Optional: Install dispersion packages for D3/D4 support
+### Optional dependencies
+
+```bash
+# Dispersion packages for D3/D4 support
 pip install dftd3 dftd4
 
-# Optional: Install wandb for experiment tracking
+# Wandb for experiment tracking
 pip install wandb
 wandb login
+
+# Training dependencies
+pip install aimnet2mult[train]
+
+# All optional dependencies
+pip install aimnet2mult[all]
 ```
 
 ## Quick Start
