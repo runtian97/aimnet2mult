@@ -126,6 +126,11 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
         result = unwrapped.load_state_dict(state_dict, strict=False)
         logging.info(result)
 
+        # Store checkpoint for restoring optimizer/scheduler state later
+        _checkpoint_to_restore = checkpoint
+    else:
+        _checkpoint_to_restore = None
+
     logging.info("Creating mixed-fidelity data loaders...")
     train_loader, val_loader = create_mixed_fidelity_loaders(train_cfg)
 
@@ -137,6 +142,23 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
     scheduler = None
     if train_cfg.scheduler is not None:
         scheduler = get_scheduler(optimizer, train_cfg.scheduler)
+
+    # Restore optimizer and scheduler state if continuing from checkpoint
+    if _checkpoint_to_restore is not None:
+        if isinstance(_checkpoint_to_restore, dict):
+            if "optimizer" in _checkpoint_to_restore:
+                try:
+                    optimizer.load_state_dict(_checkpoint_to_restore["optimizer"])
+                    logging.info("Restored optimizer state from checkpoint")
+                except Exception as e:
+                    logging.warning(f"Could not restore optimizer state: {e}")
+
+            if scheduler is not None and "scheduler" in _checkpoint_to_restore:
+                try:
+                    scheduler.load_state_dict(_checkpoint_to_restore["scheduler"])
+                    logging.info("Restored scheduler state from checkpoint")
+                except Exception as e:
+                    logging.warning(f"Could not restore scheduler state: {e}")
 
     logging.info("Creating loss function...")
     loss = build_module(OmegaConf.to_container(train_cfg.loss, resolve=True))
