@@ -13,7 +13,7 @@ kwargs:
     aim_size: 256
     aev:
       rc_s: 5.0
-      nshifts_s: 32
+      nshifts_s: 16
     num_charge_channels: 2
     outputs:
       energy_mlp:

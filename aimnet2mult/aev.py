@@ -36,7 +36,7 @@ class AEVSV(nn.Module):
         self,
         rmin: float = 0.8,
         rc_s: float = 5.0,
-        nshifts_s: int = 32,
+        nshifts_s: int = 16,
         eta_s: Optional[float] = None,
         rc_v: Optional[float] = None,
         nshifts_v: Optional[int] = None,

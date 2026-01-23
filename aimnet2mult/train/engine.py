@@ -11,7 +11,7 @@ import torch
 
 from .utils import prepare_batch  # noqa: E402
 
-__all__ = ["create_trainer", "create_evaluator"]
+__all__ = ["create_trainer", "create_evaluator", "compute_batch_rmse"]
 
 
 def create_trainer(model: nn.Module, optimizer, loss_fn, device):
@@ -41,8 +41,9 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
         # Store loss separately for WandB logging
         engine.state.loss = total_loss.item()
 
-        # Compute batch-level RMSE for high-frequency logging
-        engine.state.batch_rmse = _compute_batch_rmse(pred, y)
+        # Store pred and y for optional RMSE computation (only computed when logged)
+        engine.state.last_pred = pred
+        engine.state.last_y = y
 
         # Return pred and y for metrics computation
         return pred, y
@@ -50,8 +51,11 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
     return Engine(_update)
 
 
-def _compute_batch_rmse(pred: Dict, y_true: Dict) -> Dict:
-    """Compute RMSE for each property on a single batch."""
+def compute_batch_rmse(pred: Dict, y_true: Dict) -> Dict:
+    """Compute RMSE for each property on a single batch.
+
+    Called on-demand by logging handlers, not every iteration.
+    """
     rmse = {}
     with torch.no_grad():
         for key in ['energy', 'forces', 'charges', 'spin_charges']:

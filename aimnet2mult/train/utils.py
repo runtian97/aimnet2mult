@@ -166,22 +166,32 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
 
     # Log batch-level train RMSE (energy, forces, charges, spin_charges)
+    # Only computed at logging frequency, not every iteration
+    from .engine import compute_batch_rmse
+
     def log_batch_rmse(engine):
-        if hasattr(engine.state, 'batch_rmse') and engine.state.batch_rmse:
-            metrics = {}
-            ev_to_kcal = 23.06
+        # Compute RMSE on-demand using stored predictions
+        if not hasattr(engine.state, 'last_pred') or not hasattr(engine.state, 'last_y'):
+            return
 
-            if 'energy' in engine.state.batch_rmse:
-                metrics['train/E_rmse'] = engine.state.batch_rmse['energy'] * ev_to_kcal
-            if 'forces' in engine.state.batch_rmse:
-                metrics['train/F_rmse'] = engine.state.batch_rmse['forces'] * ev_to_kcal
-            if 'charges' in engine.state.batch_rmse:
-                metrics['train/q_rmse'] = engine.state.batch_rmse['charges']
-            if 'spin_charges' in engine.state.batch_rmse:
-                metrics['train/s_rmse'] = engine.state.batch_rmse['spin_charges']
+        batch_rmse = compute_batch_rmse(engine.state.last_pred, engine.state.last_y)
+        if not batch_rmse:
+            return
 
-            if metrics:
-                wandb.log(metrics, step=trainer.state.iteration)
+        metrics = {}
+        ev_to_kcal = 23.06
+
+        if 'energy' in batch_rmse:
+            metrics['train/E_rmse'] = batch_rmse['energy'] * ev_to_kcal
+        if 'forces' in batch_rmse:
+            metrics['train/F_rmse'] = batch_rmse['forces'] * ev_to_kcal
+        if 'charges' in batch_rmse:
+            metrics['train/q_rmse'] = batch_rmse['charges']
+        if 'spin_charges' in batch_rmse:
+            metrics['train/s_rmse'] = batch_rmse['spin_charges']
+
+        if metrics:
+            wandb.log(metrics, step=trainer.state.iteration)
 
     trainer.add_event_handler(Events.ITERATION_COMPLETED(every=train_log_every), log_batch_rmse)
 
