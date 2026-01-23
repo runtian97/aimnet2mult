@@ -78,9 +78,22 @@ class MixedFidelityAIMNet2(AIMNet2):
             self._create_fidelity_readouts(base_model_config)
 
     def _create_fidelity_readouts(self, config):
-        """Create separate readout layers for each fidelity."""
+        """Create separate readout layers for each fidelity.
+
+        Optimized: Only fidelity-specific modules (with learnable element-dependent
+        parameters) are duplicated per fidelity. Shared modules (no learnable params
+        or fidelity-agnostic) are kept as single instances.
+
+        Fidelity-specific: Output (energy_mlp), AtomicShift
+        Shared: AtomicSum, LRCoulomb
+        """
         from ..config import build_module
-        from ..modules import AtomicShift
+        from ..modules import AtomicShift, AtomicSum, LRCoulomb, Output
+
+        # Modules that need separate instances per fidelity (have element-specific learnable params)
+        FIDELITY_SPECIFIC_TYPES = (Output, AtomicShift)
+        # Modules that can be shared (no learnable params or fidelity-agnostic)
+        SHARED_TYPES = (AtomicSum, LRCoulomb)
 
         # Store original readout
         self.shared_readout = self.outputs
@@ -88,38 +101,53 @@ class MixedFidelityAIMNet2(AIMNet2):
         # Create fidelity-specific readouts
         self.fidelity_readouts = nn.ModuleDict()
 
+        # Create shared readouts (only once)
+        self.shared_readouts = nn.ModuleDict()
+
         # Calculate max atomic number for all fidelities
         max_z_base = 128
         max_z_total = self.num_fidelities * self.fidelity_offset + max_z_base
 
+        # Build one set of outputs to identify shared vs fidelity-specific
+        if isinstance(config, dict) and 'kwargs' in config:
+            outputs_cfg = config['kwargs']['outputs']
+        else:
+            outputs_cfg = config['outputs']
+
+        # First pass: identify and store shared modules
+        template_outputs = build_module(outputs_cfg)
+        for key, module in template_outputs.items():
+            if isinstance(module, SHARED_TYPES):
+                self.shared_readouts[key] = module
+
+        # Second pass: create fidelity-specific modules for each fidelity
         for fid in range(self.num_fidelities):
-            # Build outputs directly without building full model
-            if isinstance(config, dict) and 'kwargs' in config:
-                outputs_cfg = config['kwargs']['outputs']
-            else:
-                outputs_cfg = config['outputs']
             fid_outputs = build_module(outputs_cfg)
+            fid_specific = {}
 
-            # Expand atomic shift modules to handle shifted atomic numbers
             for key, module in fid_outputs.items():
-                if isinstance(module, AtomicShift):
-                    # Expand the shifts embedding to accommodate all fidelities
-                    old_shifts = module.shifts
-                    old_size = old_shifts.weight.shape[0]
-                    new_size = max_z_total + 1
+                # Only keep fidelity-specific modules
+                if isinstance(module, FIDELITY_SPECIFIC_TYPES):
+                    # Expand atomic shift modules to handle shifted atomic numbers
+                    if isinstance(module, AtomicShift):
+                        old_shifts = module.shifts
+                        old_size = old_shifts.weight.shape[0]
+                        new_size = max_z_total + 1
 
-                    # Create new embedding with expanded size
-                    new_shifts = nn.Embedding(new_size, old_shifts.weight.shape[1], padding_idx=0)
+                        # Create new embedding with expanded size
+                        new_shifts = nn.Embedding(new_size, old_shifts.weight.shape[1], padding_idx=0)
 
-                    # Copy existing weights and initialize new ones
-                    with torch.no_grad():
-                        nn.init.zeros_(new_shifts.weight)
-                        new_shifts.weight[:old_size] = old_shifts.weight
+                        # Copy existing weights and initialize new ones
+                        with torch.no_grad():
+                            nn.init.zeros_(new_shifts.weight)
+                            new_shifts.weight[:old_size] = old_shifts.weight
 
-                    module.shifts = new_shifts
+                        module.shifts = new_shifts
+
+                    fid_specific[key] = module
 
             # Convert dict to ModuleDict before assigning
-            self.fidelity_readouts[str(fid)] = nn.ModuleDict(fid_outputs)
+            self.fidelity_readouts[str(fid)] = nn.ModuleDict(fid_specific)
 
     def forward(
         self,
@@ -177,9 +205,10 @@ class MixedFidelityAIMNet2(AIMNet2):
         """
         Apply fidelity-specific readouts to molecules.
 
-        Optimized implementation: only compute readouts for molecules belonging to each
-        fidelity, avoiding redundant computation. Each molecule is processed by exactly
-        one readout head (its own fidelity's), not all readout heads.
+        Optimized implementation:
+        1. Fidelity-specific modules (energy_mlp, atomic_shift) are applied only to
+           molecules belonging to each fidelity, avoiding redundant computation.
+        2. Shared modules (atomic_sum, lrcoulomb) are applied once to the full batch.
 
         This produces identical gradients to the naive approach because gradients only
         flow through the readout that produces the output used in the loss.
@@ -190,17 +219,16 @@ class MixedFidelityAIMNet2(AIMNet2):
         # Initialize result with input data
         result = dict(data)
 
-        # Output keys that readouts produce
-        output_keys = {'energy', 'charges', 'spin_charges'}
+        # Output keys that fidelity-specific readouts produce (before shared modules)
+        fidelity_output_keys = {'energy', 'charges', 'spin_charges'}
 
         # Pre-allocate output tensors (will be filled per-fidelity)
-        # We need to determine shapes from a sample readout pass
         output_tensors = {}
 
         # Get unique fidelities present in this batch (avoid computing unused fidelities)
         unique_fidelities = torch.unique(fidelities)
 
-        # Process each fidelity separately - only compute for molecules of that fidelity
+        # Step 1: Apply fidelity-specific modules per-fidelity
         for fid in unique_fidelities:
             fid_int = fid.item()
 
@@ -221,13 +249,13 @@ class MixedFidelityAIMNet2(AIMNet2):
                     # Non-batch tensor (e.g., scalar) - keep as is
                     fid_data[key] = value
 
-            # Apply this fidelity's readout chain to only its molecules
+            # Apply this fidelity's readout chain (fidelity-specific modules only)
             readouts = self.fidelity_readouts[str(fid_int)]
             for key, module in readouts.items():
                 fid_data = module(fid_data)
 
             # Place results back into the correct positions in output tensors
-            for key in output_keys:
+            for key in fidelity_output_keys:
                 if key not in fid_data:
                     continue
 
@@ -247,9 +275,13 @@ class MixedFidelityAIMNet2(AIMNet2):
                 # Place this fidelity's outputs at the correct indices
                 output_tensors[key][indices] = fid_output
 
-        # Add output tensors to result
+        # Add fidelity-specific output tensors to result
         for key, tensor in output_tensors.items():
             result[key] = tensor
+
+        # Step 2: Apply shared modules once to the full batch
+        for key, module in self.shared_readouts.items():
+            result = module(result)
 
         return result
 
