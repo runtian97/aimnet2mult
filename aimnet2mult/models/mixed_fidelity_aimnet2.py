@@ -177,118 +177,79 @@ class MixedFidelityAIMNet2(AIMNet2):
         """
         Apply fidelity-specific readouts to molecules.
 
-        To preserve gradient flow for forces computation, we apply ALL fidelity readouts
-        to ALL molecules, then select the appropriate output based on fidelity labels.
-        This ensures that gradients flow through all coordinates.
+        Optimized implementation: only compute readouts for molecules belonging to each
+        fidelity, avoiding redundant computation. Each molecule is processed by exactly
+        one readout head (its own fidelity's), not all readout heads.
+
+        This produces identical gradients to the naive approach because gradients only
+        flow through the readout that produces the output used in the loss.
         """
         batch_size = fidelities.size(0)
         device = fidelities.device
 
-        # Apply each fidelity's readouts to the entire batch
-        all_outputs = {}
-        for fid in range(self.num_fidelities):
-            fid_data = dict(data)  # Copy the input data
+        # Initialize result with input data
+        result = dict(data)
 
-            # Apply this fidelity's readout chain
-            readouts = self.fidelity_readouts[str(fid)]
+        # Output keys that readouts produce
+        output_keys = {'energy', 'charges', 'spin_charges'}
+
+        # Pre-allocate output tensors (will be filled per-fidelity)
+        # We need to determine shapes from a sample readout pass
+        output_tensors = {}
+
+        # Get unique fidelities present in this batch (avoid computing unused fidelities)
+        unique_fidelities = torch.unique(fidelities)
+
+        # Process each fidelity separately - only compute for molecules of that fidelity
+        for fid in unique_fidelities:
+            fid_int = fid.item()
+
+            # Get indices of molecules belonging to this fidelity
+            mask = (fidelities == fid)
+            indices = torch.where(mask)[0]
+
+            if len(indices) == 0:
+                continue
+
+            # Extract subset of data for this fidelity's molecules
+            fid_data = {}
+            for key, value in data.items():
+                if isinstance(value, torch.Tensor) and value.dim() > 0 and value.size(0) == batch_size:
+                    # Batch-dimension tensor - extract subset
+                    fid_data[key] = value[indices]
+                else:
+                    # Non-batch tensor (e.g., scalar) - keep as is
+                    fid_data[key] = value
+
+            # Apply this fidelity's readout chain to only its molecules
+            readouts = self.fidelity_readouts[str(fid_int)]
             for key, module in readouts.items():
                 fid_data = module(fid_data)
 
-            all_outputs[fid] = fid_data
+            # Place results back into the correct positions in output tensors
+            for key in output_keys:
+                if key not in fid_data:
+                    continue
 
-        # Select the appropriate output for each molecule based on its fidelity
-        # This preserves gradients for all molecules
-        result = dict(data)
+                fid_output = fid_data[key]
 
-        # Find all output keys that were produced by readouts
-        output_keys = set()
-        for fid_data in all_outputs.values():
-            output_keys.update(fid_data.keys())
+                # Handle scalar outputs
+                if fid_output.dim() == 0:
+                    result[key] = fid_output
+                    continue
 
-        # For each output key, select the right value for each molecule
-        # Process all final outputs (energy, charges, spin_charges)
-        allowed_keys = {'energy', 'charges', 'spin_charges'}
-        for key in output_keys:
-            if key not in allowed_keys:
-                # Skip everything except allowed final outputs
-                continue
+                # Initialize output tensor on first encounter
+                if key not in output_tensors:
+                    # Determine full output shape
+                    output_shape = (batch_size,) + fid_output.shape[1:]
+                    output_tensors[key] = torch.zeros(output_shape, dtype=fid_output.dtype, device=device)
 
-            # Check if this key exists in any fidelity output
-            has_output = any(key in all_outputs[fid] for fid in range(self.num_fidelities))
-            if not has_output:
-                continue
+                # Place this fidelity's outputs at the correct indices
+                output_tensors[key][indices] = fid_output
 
-            # Get a sample output to determine shape
-            sample_output = None
-            for fid in range(self.num_fidelities):
-                if key in all_outputs[fid]:
-                    sample_output = all_outputs[fid][key]
-                    break
-
-            if sample_output is None:
-                continue
-
-            # Handle scalar outputs (like total energy)
-            if sample_output.dim() == 0:
-                # For scalar outputs, just use the output from the first fidelity
-                # (they should be the same for single-molecule batches)
-                result[key] = sample_output
-                continue
-
-            # Align tensors so the leading dimension matches the batch size.
-            def _align_to_batch(tensor: torch.Tensor) -> torch.Tensor:
-                try:
-                    return tensor.expand(batch_size, *tensor.shape[1:])
-                except RuntimeError as exc:
-                    raise RuntimeError(
-                        f"Unexpected leading dimension for key '{key}': got {tensor.size(0)}, "
-                        f"expected 1 or {batch_size}"
-                    ) from exc
-
-            aligned_sample = _align_to_batch(sample_output)
-
-            # For per-molecule or per-atom outputs, select based on fidelity
-            # Stack outputs from all fidelities
-            stacked_outputs = []
-            for fid in range(self.num_fidelities):
-                if key in all_outputs[fid]:
-                    stacked_outputs.append(_align_to_batch(all_outputs[fid][key]))
-                else:
-                    # If this fidelity doesn't have this output, create zeros
-                    stacked_outputs.append(torch.zeros_like(aligned_sample))
-
-            # Stack along a new dimension: [num_fidelities, batch_size, ...]
-            stacked = torch.stack(stacked_outputs, dim=0)
-
-            # Select the appropriate fidelity for each molecule
-            # fidelities shape: [batch_size]
-            # We need to select stacked[fidelity[i], i, ...] for each i
-
-            # Create index tensors
-            batch_indices = torch.arange(batch_size, device=device)
-
-            # Use advanced indexing to select the right fidelity for each molecule
-            try:
-                if len(stacked.shape) == 2:
-                    # Shape: [num_fidelities, batch_size] -> [batch_size]
-                    result[key] = stacked[fidelities, batch_indices]
-                elif len(stacked.shape) == 3:
-                    # Shape: [num_fidelities, batch_size, feature_dim] -> [batch_size, feature_dim]
-                    result[key] = stacked[fidelities, batch_indices, :]
-                else:
-                    # General case: [num_fidelities, batch_size, ...] -> [batch_size, ...]
-                    # This uses gather, which preserves gradients
-                    result[key] = torch.index_select(
-                        stacked.view(self.num_fidelities * batch_size, *stacked.shape[2:]),
-                        dim=0,
-                        index=fidelities * batch_size + batch_indices
-                    ).view(batch_size, *stacked.shape[2:])
-            except RuntimeError as exc:
-                raise RuntimeError(
-                    f"Failed to select fidelity-specific output for key '{key}' with "
-                    f"stacked shape {tuple(stacked.shape)}, sample shape {tuple(sample_output.shape)}, "
-                    f"batch_size={batch_size}, fidelities shape={tuple(fidelities.shape)}"
-                ) from exc
+        # Add output tensors to result
+        for key, tensor in output_tensors.items():
+            result[key] = tensor
 
         return result
 
