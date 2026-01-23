@@ -345,7 +345,7 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
     # Attach scheduler if configured
     if scheduler is not None:
         logging.info("Attaching learning rate scheduler: %s", type(scheduler).__name__)
-        validator.add_event_handler(Events.COMPLETED, scheduler)
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
 
         # Add early termination based on low LR if configured
         if hasattr(train_cfg.scheduler, 'terminate_on_low_lr'):
