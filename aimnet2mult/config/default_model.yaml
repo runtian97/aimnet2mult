@@ -3,7 +3,7 @@
 
 class: aimnet2mult.models.aimnet2.AIMNet2
 kwargs:
-    nfeature: 128
+    nfeature: 16
     d2features: true
     ncomb_v: 12
     hidden:
