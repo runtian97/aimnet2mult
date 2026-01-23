@@ -88,16 +88,25 @@ class MTAdaWLoss:
             loss[f'{name}_scale'] = s
         # special name for the total loss
         loss['loss'] = sum(loss[k] for k in self.components)
-        # update weights
-        l = loss['loss'].item()
-        for i, (name, (fn, w, s)) in enumerate(self.components.items()):
-            if i == 0:
-                continue
-            if (loss[name].item() / l) > w:
-                mult = 1.0 - self.eta
-            else:
-                mult = 1.0 + self.eta
-            self.components[name][2] *= mult
+
+        # Update weights - batch the GPU->CPU transfer
+        # Detach and compute ratios on GPU, then single transfer
+        with torch.no_grad():
+            total_loss = loss['loss'].detach()
+            component_names = list(self.components.keys())[1:]  # Skip first
+            if component_names:
+                # Compute all ratios on GPU
+                ratios = torch.stack([loss[name].detach() / total_loss for name in component_names])
+                target_weights = torch.tensor([self.components[name][1] for name in component_names],
+                                              device=ratios.device)
+                # Single GPU->CPU transfer for comparison
+                above_target = (ratios > target_weights).cpu().tolist()
+
+                # Update scales based on comparison
+                for i, name in enumerate(component_names):
+                    mult = (1.0 - self.eta) if above_target[i] else (1.0 + self.eta)
+                    self.components[name][2] *= mult
+
         return loss
 def _get_sample_mask(y_true: Dict[str, Tensor], key_true: str, target: Tensor) -> Tensor:
     mask = y_true.get(f'{key_true}_mask')
@@ -114,9 +123,10 @@ def _get_sample_mask(y_true: Dict[str, Tensor], key_true: str, target: Tensor) -
 def _apply_sample_mask(values: Tensor, mask: Tensor) -> Tensor:
     mask = mask.squeeze(-1)
     denom = mask.sum()
-    if denom.item() == 0:
-        return torch.zeros((), device=values.device, dtype=values.dtype)
-    return (values * mask).sum() / denom
+    # Avoid .item() - use torch.where for GPU-friendly conditional
+    masked_sum = (values * mask).sum()
+    # Return 0 if denom is 0, otherwise return masked mean
+    return torch.where(denom > 0, masked_sum / denom, torch.zeros((), device=values.device, dtype=values.dtype))
 
 
 def mse_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str) -> Tensor:

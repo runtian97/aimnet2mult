@@ -226,17 +226,16 @@ class MixedFidelityAIMNet2(AIMNet2):
         output_tensors = {}
 
         # Get unique fidelities present in this batch (avoid computing unused fidelities)
-        unique_fidelities = torch.unique(fidelities)
+        # Transfer to CPU once for iteration (avoid per-iteration .item() calls)
+        unique_fidelities = torch.unique(fidelities).cpu().tolist()
 
         # Step 1: Apply fidelity-specific modules per-fidelity
-        for fid in unique_fidelities:
-            fid_int = fid.item()
-
+        for fid_int in unique_fidelities:
             # Get indices of molecules belonging to this fidelity
-            mask = (fidelities == fid)
+            mask = (fidelities == fid_int)
             indices = torch.where(mask)[0]
 
-            if len(indices) == 0:
+            if indices.numel() == 0:
                 continue
 
             # Extract subset of data for this fidelity's molecules

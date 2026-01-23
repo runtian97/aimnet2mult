@@ -141,11 +141,11 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     log_frequency = cfg.get("log_frequency", {})
     train_log_every = log_frequency.get("train", 10)
 
-    # Log training loss
+    # Log training loss (call .item() only at log frequency, not every iteration)
     wandb_logger.attach_output_handler(
         trainer,
         event_name=Events.ITERATION_COMPLETED(every=train_log_every),
-        output_transform=lambda loss: {"loss": trainer.state.loss},
+        output_transform=lambda loss: {"loss": trainer.state.loss_tensor.item()},
         tag='train'
         )
 

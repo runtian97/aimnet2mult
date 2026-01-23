@@ -46,7 +46,9 @@ class RegMultiMetric(Metric):
     def reset(self):
         """Reset metric state."""
         super().reset()
-        self.data = defaultdict(lambda: defaultdict(float))
+        # Use None initially - will be initialized on first update with correct device
+        self._device = None
+        self.data = defaultdict(lambda: defaultdict(lambda: None))
         self.atoms = 0.0
         self.samples = 0.0
         self.loss = defaultdict(float)
@@ -55,23 +57,29 @@ class RegMultiMetric(Metric):
         """
         Update metric for a single property.
 
+        Accumulates on GPU to avoid CPU-GPU sync. Transfer to CPU only in compute().
+
         Args:
             key: Property name
             pred: Predicted values
             true: True values
             mask: Optional mask for valid values (for mixed-fidelity training)
         """
+        # Track device for later use
+        if self._device is None:
+            self._device = pred.device
+
         e = true - pred
 
         # Apply mask if provided
         if mask is not None:
-            # Ensure mask has same shape as error
-            while mask.dim() < e.dim():
-                mask = mask.unsqueeze(-1)
+            # Ensure mask has same shape as error - use expand instead of loop
+            if mask.dim() < e.dim():
+                mask = mask.view(mask.shape + (1,) * (e.dim() - mask.dim()))
             e = e * mask
-            n_valid = mask.sum().item()
+            n_valid = mask.sum()  # Keep as tensor on GPU
         else:
-            n_valid = e.numel()
+            n_valid = torch.tensor(e.numel(), device=pred.device, dtype=torch.float32)
 
         # Flatten error for accumulation
         if pred.ndim > true.ndim:
@@ -79,12 +87,26 @@ class RegMultiMetric(Metric):
         else:
             e = e.view(-1)
 
+        # Accumulate on GPU (use float32 for MPS compatibility)
         d = self.data[key]
-        d['sum_abs_err'] += e.abs().sum(-1).to(dtype=torch.double, device='cpu')
-        d['sum_sq_err'] += e.pow(2).sum(-1).to(dtype=torch.double, device='cpu')
-        d['sum_true'] += true.sum().to(dtype=torch.double, device='cpu')
-        d['sum_sq_true'] += true.pow(2).sum().to(dtype=torch.double, device='cpu')
-        d['n_valid'] = d.get('n_valid', 0.0) + n_valid
+        sum_abs = e.abs().sum(-1).to(dtype=torch.float32)
+        sum_sq = e.pow(2).sum(-1).to(dtype=torch.float32)
+        sum_true = true.sum().to(dtype=torch.float32)
+        sum_sq_true = true.pow(2).sum().to(dtype=torch.float32)
+
+        # Initialize or accumulate (keep on GPU)
+        if d['sum_abs_err'] is None:
+            d['sum_abs_err'] = sum_abs
+            d['sum_sq_err'] = sum_sq
+            d['sum_true'] = sum_true
+            d['sum_sq_true'] = sum_sq_true
+            d['n_valid'] = n_valid.float()
+        else:
+            d['sum_abs_err'] = d['sum_abs_err'] + sum_abs
+            d['sum_sq_err'] = d['sum_sq_err'] + sum_sq
+            d['sum_true'] = d['sum_true'] + sum_true
+            d['sum_sq_true'] = d['sum_sq_true'] + sum_sq_true
+            d['n_valid'] = d['n_valid'] + n_valid.float()
 
     @reinit__is_reduced
     def update(self, output) -> None:
@@ -131,9 +153,20 @@ class RegMultiMetric(Metric):
                     self.loss[k] += loss * b
 
     def compute(self):
-        """Compute final metrics across all accumulated batches."""
+        """Compute final metrics across all accumulated batches.
+
+        Transfers accumulated GPU tensors to CPU only here, avoiding
+        GPU-CPU sync during training loop.
+        """
         if self.samples == 0:
             return {}
+
+        # Transfer GPU tensors to CPU for final computation
+        # This is the ONLY place we do GPU->CPU transfer
+        for k1, v1 in self.data.items():
+            for k2, v2 in v1.items():
+                if isinstance(v2, torch.Tensor):
+                    self.data[k1][k2] = v2.to(dtype=torch.float64, device='cpu')
 
         # Synchronize across distributed processes
         if idist.get_world_size() > 1:
@@ -165,6 +198,8 @@ class RegMultiMetric(Metric):
 
             # Use n_valid if available (for masked properties), otherwise use _n
             n_samples = v.get('n_valid', _n)
+            if isinstance(n_samples, torch.Tensor):
+                n_samples = n_samples.item()
             if n_samples == 0:
                 continue
 

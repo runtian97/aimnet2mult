@@ -38,8 +38,9 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
         torch.nn.utils.clip_grad_value_(model.parameters(), 0.4)
         optimizer.step()
 
-        # Store loss separately for WandB logging
-        engine.state.loss = total_loss.item()
+        # Store loss tensor for WandB logging (avoid .item() every iteration)
+        # The tensor is detached and kept on GPU; .item() called only at log frequency
+        engine.state.loss_tensor = total_loss.detach()
 
         # Store pred and y for optional RMSE computation (only computed when logged)
         engine.state.last_pred = pred
@@ -69,9 +70,9 @@ def compute_batch_rmse(pred: Dict, y_true: Dict) -> Dict:
             error = (pred[key] - y_true[key]).pow(2)
 
             if mask is not None:
-                # Apply mask
-                while mask.dim() < error.dim():
-                    mask = mask.unsqueeze(-1)
+                # Apply mask - use view instead of while loop
+                if mask.dim() < error.dim():
+                    mask = mask.view(mask.shape + (1,) * (error.dim() - mask.dim()))
                 error = error * mask
                 n_valid = mask.sum().item()
                 if n_valid == 0:
