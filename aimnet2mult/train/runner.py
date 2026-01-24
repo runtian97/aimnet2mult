@@ -288,9 +288,27 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
             val_metric.attach(validator, 'multi')
 
             # Instantiate separate metrics for trainer
+            # Note: trainer returns loss.item() for WandB, so we use custom handler
+            # to extract pred/y from engine.state
             train_metric = metric_class(**kwargs)
             train_metric.attach_loss(loss_fn)
-            train_metric.attach(trainer, "metrics")
+
+            # Manually attach with custom output extraction from engine.state
+            @trainer.on(Events.ITERATION_COMPLETED)
+            def _update_train_metric(engine):
+                if hasattr(engine.state, 'last_pred') and hasattr(engine.state, 'last_y'):
+                    train_metric.update((engine.state.last_pred, engine.state.last_y))
+
+            @trainer.on(Events.EPOCH_STARTED)
+            def _reset_train_metric(engine):
+                train_metric.reset()
+
+            @trainer.on(Events.EPOCH_COMPLETED)
+            def _compute_train_metric(engine):
+                result = train_metric.compute()
+                if not hasattr(engine.state, 'metrics'):
+                    engine.state.metrics = {}
+                engine.state.metrics.update(result)
 
             # Log validation metrics after validation
             # Note: ignite merges dict returns from compute() directly into state.metrics
@@ -322,9 +340,27 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
                 metric.attach(validator, name)
 
             # Create separate metrics for trainer
+            # Note: trainer returns loss.item() for WandB, so we use custom handlers
             train_metrics = create_metrics(loss_fn, properties, device="cpu")
-            for name, metric in train_metrics.items():
-                metric.attach(trainer, name)
+
+            @trainer.on(Events.ITERATION_COMPLETED)
+            def _update_legacy_train_metrics(engine):
+                if hasattr(engine.state, 'last_pred') and hasattr(engine.state, 'last_y'):
+                    output = (engine.state.last_pred, engine.state.last_y)
+                    for metric in train_metrics.values():
+                        metric.update(output)
+
+            @trainer.on(Events.EPOCH_STARTED)
+            def _reset_legacy_train_metrics(engine):
+                for metric in train_metrics.values():
+                    metric.reset()
+
+            @trainer.on(Events.EPOCH_COMPLETED)
+            def _compute_legacy_train_metrics(engine):
+                if not hasattr(engine.state, 'metrics'):
+                    engine.state.metrics = {}
+                for name, metric in train_metrics.items():
+                    engine.state.metrics[name] = metric.compute()
 
             # Get unit configuration from metrics config
             unit_conversions = None
