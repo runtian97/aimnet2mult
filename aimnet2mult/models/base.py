@@ -26,12 +26,9 @@ class AIMNet2Base(nn.Module):
     def _set_default_charge(self, data: Dict[str, Tensor]) -> Dict[str, Tensor]:
         """Set default charge to 0 (neutral) if not provided."""
         if 'charge' not in data:
-            # Infer batch size from coordinates or numbers
             if data['coord'].ndim == 3:
-                # Batched input: (B, N, 3)
                 batch_size = data['coord'].shape[0]
             else:
-                # Single molecule or flattened: assume batch size 1
                 batch_size = 1
             data['charge'] = torch.zeros(batch_size, dtype=torch.float32, device=data['coord'].device)
         return data

@@ -149,11 +149,15 @@ def mse_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: 
 def peratom_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str) -> Tensor:
     """ MSE loss function with per-atom normalization correction.
     Suitable when some of the values are zero both in y_pred and y_true due to padding of inputs.
-    Returns zero loss if the key is missing from y_true (masked out entirely).
+    Returns zero loss if the key is missing from y_true or y_pred.
     """
-    if key_true not in y_true:
-        # Key not present in this batch - return zero loss
-        return torch.zeros((), device=y_pred[key_pred].device, dtype=y_pred[key_pred].dtype)
+    if key_true not in y_true or key_pred not in y_pred:
+        # Key not present - return zero loss
+        # Find any tensor to get device/dtype
+        for v in y_pred.values():
+            if isinstance(v, torch.Tensor):
+                return torch.zeros((), device=v.device, dtype=v.dtype)
+        return torch.zeros(())
     x = y_true[key_true]
     y = y_pred[key_pred]
 

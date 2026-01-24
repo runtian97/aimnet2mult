@@ -14,8 +14,16 @@ from .utils import prepare_batch  # noqa: E402
 __all__ = ["create_trainer", "create_evaluator", "compute_batch_rmse"]
 
 
-def create_trainer(model: nn.Module, optimizer, loss_fn, device):
-    """Create the Ignite training engine with fidelity-aware batches."""
+def create_trainer(model: nn.Module, optimizer, loss_fn, device, use_base_model: bool = False):
+    """Create the Ignite training engine with fidelity-aware batches.
+
+    Args:
+        model: The model to train
+        optimizer: The optimizer
+        loss_fn: The loss function
+        device: The device to use
+        use_base_model: If True, don't pass fidelities to the model (base AIMNet2 mode)
+    """
 
     def _update(engine, batch: Tuple[Dict, Dict, "torch.Tensor"]):
         model.train()
@@ -24,8 +32,11 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device):
         x, y, fidelities = batch
         x = prepare_batch(x, device=device)
         y = prepare_batch(y, device=device)
-        fidelities = fidelities.to(device)
-        x["_fidelities"] = fidelities
+
+        # Only pass fidelities if using mixed-fidelity model
+        if not use_base_model:
+            fidelities = fidelities.to(device)
+            x["_fidelities"] = fidelities
 
         pred = model(x)
         loss_out = loss_fn(pred, y)
@@ -86,7 +97,14 @@ def compute_batch_rmse(pred: Dict, y_true: Dict) -> Dict:
     return rmse
 
 
-def create_evaluator(model: nn.Module, device):
+def create_evaluator(model: nn.Module, device, use_base_model: bool = False):
+    """Create the Ignite evaluation engine.
+
+    Args:
+        model: The model to evaluate
+        device: The device to use
+        use_base_model: If True, don't pass fidelities to the model (base AIMNet2 mode)
+    """
 
     def _inference(engine, batch: Tuple[Dict, Dict, "torch.Tensor"]):
         model.eval()
@@ -94,8 +112,12 @@ def create_evaluator(model: nn.Module, device):
             x, y, fidelities = batch
             x = prepare_batch(x, device=device)
             y = prepare_batch(y, device=device)
-            fidelities = fidelities.to(device)
-            x["_fidelities"] = fidelities
+
+            # Only pass fidelities if using mixed-fidelity model
+            if not use_base_model:
+                fidelities = fidelities.to(device)
+                x["_fidelities"] = fidelities
+
             pred = model(x)
         return pred, y
 

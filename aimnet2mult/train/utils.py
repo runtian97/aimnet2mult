@@ -137,63 +137,19 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
-    # Get logging frequency from config
-    log_frequency = cfg.get("log_frequency", {})
-    train_log_every = log_frequency.get("train", 10)
-
-    # Log training loss (call .item() only at log frequency, not every iteration)
     wandb_logger.attach_output_handler(
         trainer,
-        event_name=Events.ITERATION_COMPLETED(every=train_log_every),
-        output_transform=lambda loss: {"loss": trainer.state.loss_tensor.item()},
+        event_name=Events.ITERATION_COMPLETED(every=200),
+        output_transform=lambda loss: {"loss": loss},
         tag='train'
         )
-
-    # Log validation metrics (filter out non-numeric values like nested dicts)
-    def log_val_metrics(engine):
-        metrics = engine.state.metrics
-        logging.info(f"[WANDB DEBUG] Validation completed. Metrics keys: {list(metrics.keys()) if metrics else 'None'}")
-        if metrics:
-            val_metrics = {}
-            for key, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    val_metrics[f'val/{key}'] = value
-            logging.info(f"[WANDB DEBUG] Logging val metrics: {list(val_metrics.keys())}")
-            if val_metrics:
-                wandb.log(val_metrics, step=trainer.state.iteration)
-                logging.info(f"[WANDB DEBUG] Successfully logged {len(val_metrics)} val metrics at step {trainer.state.iteration}")
-
-    validator.add_event_handler(Events.EPOCH_COMPLETED, log_val_metrics)
-
-    # Log batch-level train RMSE (energy, forces, charges, spin_charges)
-    # Only computed at logging frequency, not every iteration
-    from .engine import compute_batch_rmse
-
-    def log_batch_rmse(engine):
-        # Compute RMSE on-demand using stored predictions
-        if not hasattr(engine.state, 'last_pred') or not hasattr(engine.state, 'last_y'):
-            return
-
-        batch_rmse = compute_batch_rmse(engine.state.last_pred, engine.state.last_y)
-        if not batch_rmse:
-            return
-
-        metrics = {}
-        ev_to_kcal = 23.06
-
-        if 'energy' in batch_rmse:
-            metrics['train/E_rmse'] = batch_rmse['energy'] * ev_to_kcal
-        if 'forces' in batch_rmse:
-            metrics['train/F_rmse'] = batch_rmse['forces'] * ev_to_kcal
-        if 'charges' in batch_rmse:
-            metrics['train/q_rmse'] = batch_rmse['charges']
-        if 'spin_charges' in batch_rmse:
-            metrics['train/s_rmse'] = batch_rmse['spin_charges']
-
-        if metrics:
-            wandb.log(metrics, step=trainer.state.iteration)
-
-    trainer.add_event_handler(Events.ITERATION_COMPLETED(every=train_log_every), log_batch_rmse)
+    wandb_logger.attach_output_handler(
+        validator,
+        event_name=Events.EPOCH_COMPLETED,
+        global_step_transform=lambda *_: trainer.state.iteration,
+        metric_names="all",
+        tag='val'
+        )
 
     class EpochLRLogger(OptimizerParamsHandler):
         def __call__(self, engine, logger, event_name):
@@ -210,7 +166,7 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
         event_name=Events.EPOCH_STARTED
         )
 
-    score_function = lambda engine: 1.0 / engine.state.metrics.get('loss', float('inf'))
+    score_function = lambda engine: 1.0 / engine.state.metrics['loss']
     model_checkpoint = ModelCheckpoint(
             wandb.run.dir, n_saved=1, filename_prefix='best',
             require_empty=False, score_function=score_function,

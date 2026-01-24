@@ -73,9 +73,16 @@ def validate_fidelity_configuration(train_cfg):
     # Validate fidelity offset if present
     if hasattr(train_cfg, 'fidelity_offset'):
         offset = train_cfg.fidelity_offset
-        if offset <= 0:
-            raise ValueError(f"fidelity_offset must be positive, got {offset}")
-        logging.info(f"Using fidelity_offset: {offset}")
+        use_base_model = getattr(train_cfg, 'use_base_model', False)
+        # Allow offset=0 for single fidelity with base model (aimnet2 compat mode)
+        if offset < 0:
+            raise ValueError(f"fidelity_offset must be non-negative, got {offset}")
+        if offset == 0 and num_fidelities > 1:
+            raise ValueError(f"fidelity_offset must be positive for multi-fidelity training ({num_fidelities} fidelities)")
+        if offset == 0:
+            logging.info(f"Using fidelity_offset: 0 (single-fidelity / aimnet2 compat mode)")
+        else:
+            logging.info(f"Using fidelity_offset: {offset}")
 
     # Validate use_fidelity_readouts if present
     if hasattr(train_cfg, 'use_fidelity_readouts'):

@@ -61,14 +61,15 @@ class AIMNet2(AIMNet2Base):
             raise TypeError('`outputs` is not either list or dict')
         
     def _preprocess_spin_polarized_charge(self, data: Dict[str, Tensor]) -> Dict[str, Tensor]:
-        # Handle missing mult: default to 1 (closed-shell) when not provided or zero
+        """Preprocess charge for spin-polarized (NSE) calculations.
+
+        If mult is provided, uses it. If mult is 0 or missing, defaults to 1 (closed-shell).
+        """
         if 'mult' in data:
             mult = data['mult']
             # Replace 0 with 1 (treat 0 as "not provided" → closed shell)
-            # This allows mixed batches with both open-shell (mult provided) and closed-shell (mult missing)
             mult = torch.where(mult == 0, torch.ones_like(mult), mult)
         else:
-            # If mult key doesn't exist at all, default to closed-shell
             mult = torch.ones_like(data['charge'])
 
         _half_spin = 0.5 * (mult - 1.0)

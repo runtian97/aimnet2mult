@@ -7,6 +7,7 @@ import os
 from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.multiprocessing as mp
 from ignite import distributed as idist
 from omegaconf import OmegaConf
@@ -18,6 +19,7 @@ from ..config import build_module  # noqa: E402
 from ..modules import Forces  # noqa: E402
 from .utils import get_optimizer, get_scheduler, unwrap_module, setup_wandb  # noqa: E402
 from ..models.mixed_fidelity_aimnet2 import MixedFidelityAIMNet2  # noqa: E402
+from ..models.aimnet2 import AIMNet2  # noqa: E402
 
 __all__ = ["run_training"]
 
@@ -52,13 +54,45 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
     train_cfg = OmegaConf.create(train_cfg)
 
     _force_training = "forces" in train_cfg.data.y
-    logging.info("Building mixed-fidelity AIMNet2 model...")
-    model = MixedFidelityAIMNet2(
-        base_model_config=OmegaConf.to_container(model_cfg, resolve=True),
-        num_fidelities=len(train_cfg.data.fidelity_datasets),
-        fidelity_offset=train_cfg.get("fidelity_offset", 200),
-        use_fidelity_readouts=train_cfg.get("use_fidelity_readouts", True),
-    )
+
+    # Auto-detect: single fidelity (1 dataset) vs multi-fidelity (>1 datasets)
+    num_fidelities = len(train_cfg.data.fidelity_datasets)
+    is_single_fidelity = num_fidelities == 1
+
+    if is_single_fidelity:
+        logging.info("Single dataset detected - using base AIMNet2 model (aimnet2 compatible)")
+        # Build base model directly from config
+        model_config = OmegaConf.to_container(model_cfg, resolve=True)
+        if isinstance(model_config, dict) and 'kwargs' in model_config:
+            cfg = model_config['kwargs']
+        else:
+            cfg = model_config
+
+        # Build outputs
+        outputs_cfg = cfg['outputs']
+        outputs = build_module(outputs_cfg)
+
+        model = AIMNet2(
+            aev=cfg['aev'],
+            nfeature=cfg['nfeature'],
+            d2features=cfg['d2features'],
+            ncomb_v=cfg['ncomb_v'],
+            hidden=cfg['hidden'],
+            aim_size=cfg['aim_size'],
+            outputs=outputs,
+            num_charge_channels=cfg.get('num_charge_channels', 1),
+            max_z=cfg.get('max_z', 128),
+        )
+        logging.info("Base AIMNet2 model built with max_z=%d, num_charge_channels=%d",
+                     cfg.get('max_z', 128), cfg.get('num_charge_channels', 1))
+    else:
+        logging.info("Multiple datasets detected (%d) - using multi-fidelity AIMNet2 model", num_fidelities)
+        model = MixedFidelityAIMNet2(
+            base_model_config=OmegaConf.to_container(model_cfg, resolve=True),
+            num_fidelities=num_fidelities,
+            fidelity_offset=train_cfg.get("fidelity_offset", 200),
+            use_fidelity_readouts=train_cfg.get("use_fidelity_readouts", True),
+        )
     if _force_training:
         model = Forces(model)
 
@@ -164,8 +198,8 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
     loss = build_module(OmegaConf.to_container(train_cfg.loss, resolve=True))
 
     logging.info("Building training engine...")
-    trainer = create_trainer(model, optimizer, loss, device)
-    validator = create_evaluator(model, device)
+    trainer = create_trainer(model, optimizer, loss, device, use_base_model=is_single_fidelity)
+    validator = create_evaluator(model, device, use_base_model=is_single_fidelity)
 
     _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_loader, model, loss)
 
