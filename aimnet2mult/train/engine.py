@@ -49,16 +49,12 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device, use_base_model:
         torch.nn.utils.clip_grad_value_(model.parameters(), 0.4)
         optimizer.step()
 
-        # Store loss tensor for WandB logging (avoid .item() every iteration)
-        # The tensor is detached and kept on GPU; .item() called only at log frequency
-        engine.state.loss_tensor = total_loss.detach()
-
-        # Store pred and y for optional RMSE computation (only computed when logged)
+        # Store pred and y for metrics computation
         engine.state.last_pred = pred
         engine.state.last_y = y
 
-        # Return pred and y for metrics computation
-        return pred, y
+        # Return loss value for WandB logging (matches aimnet2 behavior)
+        return total_loss.item()
 
     return Engine(_update)
 
