@@ -1,4 +1,5 @@
 # AIMNet2 Multi-Fidelity Training Configuration
+# With Ignite CosineAnnealingScheduler (iteration-based)
 
 run_name: ???
 project_name: ???
@@ -30,7 +31,7 @@ data:
         batch_size: 4096
         batch_mode: atoms
         shuffle: true
-        batches_per_epoch: 20000
+        batches_per_epoch: 20000      # <-- Used to calculate cycle_size
         sampling_strategy: weighted
 
     val:
@@ -82,7 +83,7 @@ optimizer:
   force_train: []
   class: torch.optim.AdamW
   kwargs:
-    lr: 0.00005
+    lr: 0.00005    # This will be overridden by scheduler start_value
     weight_decay: 1e-6
     betas: [0.9, 0.999]
     eps: 1e-8
@@ -95,27 +96,21 @@ optimizer:
       re: '.*.atomic_shift.shifts.weight'
       weight_decay: 0.0
 
-# Learning rate scheduler
+# Learning rate scheduler - Ignite CosineAnnealingScheduler
 scheduler:
-  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
   kwargs:
-    metric_name: val_loss  # Use validation loss (recommended to avoid overfitting)
-    factor: 0.9
-    patience: 2
-  terminate_on_low_lr: 1.0e-7
-
-# Alternative: Ignite Cosine Annealing scheduler (uncomment to use)
-# scheduler:
-#   class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
-#   kwargs:
-#     # param_name and optimizer are added automatically
-#     start_value: 1.0e-4    # Starting learning rate
-#     end_value: 1.0e-6      # Minimum learning rate at end of cycle
-#     cycle_size: 200        # Number of iterations per cycle
-#     cycle_mult: 1.0        # Multiply cycle_size by this after each cycle
-#     start_value_mult: 1.0  # Multiply start_value after each cycle
-#     end_value_mult: 1.0    # Multiply end_value after each cycle
-#   terminate_on_low_lr: 0.0
+    # param_name and optimizer are added automatically by get_scheduler()
+    start_value: 1.0e-4        # Starting learning rate
+    end_value: 1.0e-6          # Minimum learning rate at end of cycle
+    cycle_size: 200000         # Number of iterations per cycle
+                               # Calculation: 20000 batches/epoch × 10 epochs = 200000
+                               # Adjust based on your training duration
+    cycle_mult: 1.0            # Keep cycle length constant (set > 1.0 for warm restarts)
+    start_value_mult: 1.0      # Keep peak LR constant (set < 1.0 to decay over cycles)
+    end_value_mult: 1.0        # Keep min LR constant
+    warmup_duration: 0         # Optional: iterations of linear warmup before cosine
+  terminate_on_low_lr: 0.0     # Stop training if LR hits exactly 0.0
 
 # Training
 trainer:
@@ -142,10 +137,10 @@ wandb:
     log: all
     log_freq: 1000
     log_graph: true
-  # Logging frequency (iterations) - does NOT affect scheduler/optimizer
+  # Logging frequency (iterations)
   log_frequency:
     train: 500    # Log train loss every 500 iterations
-    val: 500     # Log val metrics every 500 iterations (null = per epoch)
+    val: 500      # Run validation and log metrics every 500 iterations
 
 # Metrics
 metrics:

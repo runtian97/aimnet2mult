@@ -386,6 +386,372 @@ This means:
   - The wrapper injects the fidelity label and applies SAE with the appropriate offset.
   - Each compiled `.jpt` is fidelity-specific, so use the matching model for that dataset.
 
+## Complete Training Algorithm Architecture
+
+### Training Loop Overview
+
+The training system is built on **PyTorch Ignite** with three independent subsystems:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    TRAINING LOOP ARCHITECTURE                  │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  1. DATA LOADING (Multi-Fidelity Batching)               │ │
+│  │     - Load HDF5 datasets per fidelity                    │ │
+│  │     - Apply atomic number offsets (Z → Z + fid*offset)   │ │
+│  │     - Apply SAE corrections (residual energies)          │ │
+│  │     - Create mixed batches with fidelity labels          │ │
+│  │     - Apply automatic masking for missing labels         │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ↓                                    │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  2. FORWARD PASS                                         │ │
+│  │     - Embedding lookup (extended table for all fidelities)│
+│  │     - AEV computation (radial + angular features)        │ │
+│  │     - Message passing (shared backbone)                  │ │
+│  │     - Fidelity-specific readouts (energy, charges, etc.) │ │
+│  │     - Force computation via autograd                     │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ↓                                    │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  3. LOSS COMPUTATION (Multi-Task + Masking)              │ │
+│  │     - Energy loss (MSE on available samples)             │ │
+│  │     - Forces loss (per-atom MSE with masking)            │ │
+│  │     - Charges loss (per-atom MSE with masking)           │ │
+│  │     - Spin charges loss (per-atom MSE with masking)      │ │
+│  │     - Weighted sum → total loss                          │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ↓                                    │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  4. BACKWARD PASS + OPTIMIZATION                         │ │
+│  │     - loss.backward() → compute gradients                │ │
+│  │     - Gradient clipping (value=0.4 for stability)        │ │
+│  │     - Optimizer step (AdamW with param groups)           │ │
+│  │     - Scheduler step (iteration-level LR update)         │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ↓                                    │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  5. LOGGING & VALIDATION (Configurable Frequency)        │ │
+│  │     - Train loss → WandB (every N iterations)            │ │
+│  │     - Validation run (every M iterations)                │ │
+│  │     - Validation metrics → WandB                         │ │
+│  │     - Learning rate → WandB (per epoch)                  │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ↓                                    │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  6. CHECKPOINTING                                        │ │
+│  │     - Save best model by validation loss                 │ │
+│  │     - Save optimizer + scheduler state                   │ │
+│  │     - Keep top N checkpoints                             │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Three Independent Subsystems
+
+The training loop coordinates three independent subsystems that operate on different schedules:
+
+#### 1. Scheduler (Iteration-Level LR Control)
+
+**Frequency:** Every training iteration
+
+```python
+# Ignite param schedulers update every iteration
+trainer.add_event_handler(Events.ITERATION_STARTED, scheduler)
+```
+
+**Supported Schedulers:**
+- **Ignite CosineAnnealingScheduler** (Recommended) - Smooth cosine decay per iteration
+- **Ignite LinearCyclicalScheduler** - Linear warmup/decay cycles
+- **ReduceLROnPlateau** - Metric-based reduction (uses validation loss)
+- **PyTorch schedulers** - Standard epoch-based schedulers
+
+**Key Feature:** Iteration-level control for smooth LR curves
+```yaml
+scheduler:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 200000  # In iterations, not epochs!
+```
+
+See `examples/config/scheduler_examples.yaml` for 15+ scheduler configurations.
+
+#### 2. WandB Logging
+
+**Frequency:** Configurable via `log_frequency`
+
+```yaml
+wandb:
+  log_frequency:
+    train: 500  # Log training loss every 500 iterations
+    val: 500    # Run validation and log metrics every 500 iterations
+```
+
+**What Gets Logged:**
+
+Every `log_frequency.train` iterations:
+- `train/loss` - Training loss from current batch
+
+Every `log_frequency.val` iterations (when validation completes):
+- `val/loss` - Total validation loss
+- `val/energy_loss`, `val/forces_loss`, etc. - Component losses
+- `val/E_mae`, `val/E_rmse` - Energy metrics (kcal/mol)
+- `val/F_mae`, `val/F_rmse` - Forces metrics (kcal/mol/Å)
+- `val/q_mae`, `val/q_rmse` - Charges metrics
+- `val/s_mae`, `val/s_rmse` - Spin charges metrics
+
+Every epoch start:
+- `lr_0`, `lr_1`, ... - Learning rates for all param groups
+
+**Independence:** Logging is completely independent of scheduler and validation frequency.
+
+#### 3. Validation
+
+**Frequency:** Controlled by `log_frequency.val`
+
+```python
+# Validation runs every val_every training iterations
+trainer.add_event_handler(
+    Events.ITERATION_COMPLETED(every=val_every),
+    validator.run,
+    data=val_loader
+)
+```
+
+**Process:**
+1. Switch model to eval mode
+2. Run inference on validation set (no gradients)
+3. Compute validation metrics (MAE, RMSE, loss components)
+4. Log metrics to WandB
+5. Update scheduler (if ReduceLROnPlateau)
+6. Save checkpoint (if best validation loss)
+
+### Data Flow: From HDF5 to Predictions
+
+```
+HDF5 Datasets (per fidelity)
+     ├── fidelity_0.h5 (wB97M-D3, all labels)
+     ├── fidelity_1.h5 (B3LYP, energy only)
+     └── fidelity_2.h5 (PM7, energy only)
+              ↓
+┌─────────────────────────────────────┐
+│  SizeGroupedDataset                 │
+│  - Load by molecule size            │
+│  - Apply SAE corrections            │
+│  - Store in memory/shard            │
+└─────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────┐
+│  MixedFidelityDataset               │
+│  - Apply atomic number offsets      │
+│    Fid 0: Z → Z                     │
+│    Fid 1: Z → Z + 200               │
+│    Fid 2: Z → Z + 400               │
+│  - Attach fidelity labels           │
+└─────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────┐
+│  MixedFidelitySampler               │
+│  - Sample by fidelity weights       │
+│  - Create batches (atoms or mols)   │
+│  - Shuffle within fidelity          │
+└─────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────┐
+│  Collate Function                   │
+│  - Pad to batch size                │
+│  - Create availability masks        │
+│  - Stack tensors                    │
+└─────────────────────────────────────┘
+              ↓
+        Batch Dict:
+        {
+          'coord': [B, max_atoms, 3],
+          'numbers': [B, max_atoms],  # Offset by fidelity!
+          'charge': [B],
+          'mult': [B],
+          'energy': [B],
+          'energy_mask': [B],  # Availability
+          'forces': [B, max_atoms, 3],
+          'forces_mask': [B],  # May be zeros
+          '_fidelities': [B],  # Fidelity labels
+        }
+              ↓
+┌─────────────────────────────────────┐
+│  Model Forward Pass                 │
+│  1. Embedding: numbers → features   │
+│  2. AEV: geometric features         │
+│  3. Message passing: atom updates   │
+│  4. Fidelity readout: properties    │
+└─────────────────────────────────────┘
+              ↓
+        Predictions:
+        {
+          'energy': [B],
+          'forces': [B, max_atoms, 3],
+          'charges': [B, max_atoms],
+          'spin_charges': [B, max_atoms],
+        }
+              ↓
+┌─────────────────────────────────────┐
+│  Loss Computation                   │
+│  - Apply masks to ignore missing    │
+│  - Compute per-property losses      │
+│  - Weighted sum → total loss        │
+└─────────────────────────────────────┘
+```
+
+### Training Iteration Timeline
+
+**Example:** 200 epochs × 20,000 batches/epoch = 4,000,000 total iterations
+
+With `log_frequency.train=500`, `log_frequency.val=500`:
+
+```
+Iteration    Scheduler    Train Log    Validation    Val Log    Checkpoint
+─────────    ─────────    ─────────    ──────────    ───────    ──────────
+    1        ✓ step
+    2        ✓ step
+  ...        ✓ step
+  500        ✓ step       ✓ log        ✓ run         ✓ log      ✓ save?
+  501        ✓ step
+  ...        ✓ step
+ 1000        ✓ step       ✓ log        ✓ run         ✓ log      ✓ save?
+  ...        ✓ step
+20000        ✓ step       ✓ log        ✓ run         ✓ log      ✓ save?
+           (Epoch 1 complete)
+20001        ✓ step
+  ...        ✓ step
+40000        ✓ step       ✓ log        ✓ run         ✓ log      ✓ save?
+           (Epoch 2 complete)
+```
+
+**Key Observations:**
+- Scheduler steps **4,000,000 times** (every iteration)
+- Training logged **8,000 times** (every 500 iterations)
+- Validation runs **8,000 times** (every 500 iterations)
+- Checkpoints saved **~40 times** (when validation loss improves)
+
+### Optimizer Configuration
+
+Multi-level parameter groups with different learning rates:
+
+```yaml
+optimizer:
+  class: torch.optim.AdamW
+  kwargs:
+    lr: 5.0e-5           # Base learning rate
+    weight_decay: 1.0e-6
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  param_groups:
+    embeddings:
+      re: 'afv.weight'         # Atomic feature vectors
+      lr: 2.5e-5               # Half of base LR
+      weight_decay: 0.0        # No regularization
+
+    shifts:
+      re: '.*.atomic_shift.shifts.weight'
+      weight_decay: 0.0        # No regularization
+```
+
+**Rationale:**
+- **Lower LR for embeddings:** Prevent catastrophic forgetting of atomic representations
+- **No weight decay for embeddings/shifts:** These are lookup tables, not overfit-prone weights
+- **Scheduler modulates base LR:** `start_value` and `end_value` in scheduler config
+
+### Metrics Computation
+
+**During Training** (per iteration):
+- Loss components stored in `engine.state` for later aggregation
+
+**After Epoch** (training metrics):
+- Accumulate predictions and targets over epoch
+- Compute MAE, RMSE, R² per property
+- Apply unit conversions (eV → kcal/mol)
+- Log to console and WandB
+
+**During Validation** (per validation run):
+- Run inference on full validation set
+- Compute metrics with automatic masking
+- Store in `validator.state.metrics`
+- Log to WandB with `val/` prefix
+
+**Metric Types:**
+```python
+# Example metrics output
+{
+  'loss': 0.0123,           # Total validation loss
+  'energy_loss': 0.0100,    # Energy component
+  'E_mae': 2.5,             # Energy MAE (kcal/mol)
+  'E_rmse': 3.2,            # Energy RMSE (kcal/mol)
+  'F_mae': 0.8,             # Forces MAE (kcal/mol/Å)
+  'F_rmse': 1.1,            # Forces RMSE (kcal/mol/Å)
+  'q_mae': 0.05,            # Charges MAE
+  'q_rmse': 0.08,           # Charges RMSE
+}
+```
+
+### Checkpointing Strategy
+
+**Best Model Checkpointing:**
+```python
+# Save top 5 models by validation loss
+checkpoint:
+  save_best: true
+  kwargs:
+    n_saved: 5
+    score_function: -val_loss  # Lower is better
+```
+
+**Saved State:**
+```python
+checkpoint = {
+  'model': model.state_dict(),
+  'optimizer': optimizer.state_dict(),
+  'scheduler': scheduler.state_dict(),  # For resuming
+  'epoch': current_epoch,
+  'iteration': global_iteration,
+}
+```
+
+**Automatic Saving:**
+- After each validation run
+- Only if validation loss improves
+- Keeps top N checkpoints
+- Saved to `checkpoints/{run_name}_best_*.pt`
+
+### Transfer Learning / Continue Training
+
+Resume from checkpoint with full state restoration:
+
+```bash
+python -m aimnet2mult.train.cli \
+    --config train.yaml \
+    --model model.yaml \
+    --load checkpoint.pt \   # Restores model, optimizer, scheduler
+    --save continued.pt \
+    ...
+```
+
+**What Gets Restored:**
+- Model weights (including all fidelity readouts)
+- Optimizer state (momentum, adaptive LR, etc.)
+- Scheduler state (current cycle, iteration count)
+- Epoch and iteration counters
+
+**Fine-Tuning Strategy:**
+- Load pretrained weights
+- Optionally freeze backbone: `optimizer.force_no_train: ['backbone.*']`
+- Train only new fidelity readouts
+- Use lower learning rate
+
 ### Compilation (Inference-Ready Models)
 
 After training, models are compiled per-fidelity with SAE and optional dispersion:
@@ -681,6 +1047,319 @@ Training metrics are automatically logged to wandb:
 - System metrics (GPU usage, memory)
 
 View your runs at: https://wandb.ai/your-username/your-project
+
+## Practical Training Tips
+
+### Recommended Training Workflow
+
+**1. Start with Single-Fidelity Training**
+
+Before attempting multi-fidelity:
+```bash
+# Train on your best dataset first
+python -m aimnet2mult.train.cli \
+    --config examples/config/train.yaml \
+    --model examples/config/model.yaml \
+    --save single_fidelity.pt \
+    data.fidelity_datasets.0="high_quality.h5" \
+    data.sae.energy.files.0="sae_high_quality.yaml" \
+    fidelity_offset=200 \
+    use_fidelity_readouts=false  # Use base AIMNet2 mode
+```
+
+Benefits:
+- Faster iteration
+- Easier debugging
+- Establishes baseline performance
+- Can use as pretrained weights for multi-fidelity
+
+**2. Gradually Add Fidelities**
+
+```bash
+# Add second fidelity
+python -m aimnet2mult.train.cli \
+    --config examples/config/train.yaml \
+    --model examples/config/model.yaml \
+    --load single_fidelity.pt \  # Start from pretrained
+    --save two_fidelity.pt \
+    data.fidelity_datasets.0="high_quality.h5" \
+    data.fidelity_datasets.1="medium_quality.h5" \
+    ...
+```
+
+**3. Monitor Per-Fidelity Metrics**
+
+Check WandB for each fidelity separately:
+- `val/fid0/E_rmse` - Fidelity 0 energy RMSE
+- `val/fid1/E_rmse` - Fidelity 1 energy RMSE
+
+If one fidelity performs poorly, adjust `fidelity_weights`.
+
+### Hyperparameter Tuning
+
+**Learning Rate Selection:**
+
+```yaml
+# Conservative (stable but slow)
+optimizer:
+  kwargs:
+    lr: 1.0e-5
+
+# Standard (recommended starting point)
+optimizer:
+  kwargs:
+    lr: 5.0e-5
+
+# Aggressive (faster but may diverge)
+optimizer:
+  kwargs:
+    lr: 1.0e-4
+```
+
+Use ReduceLROnPlateau to find optimal LR automatically, or use CosineAnnealing with LR range test.
+
+**Batch Size vs Atoms:**
+
+```yaml
+# Option 1: Fixed batch size (molecules)
+samplers:
+  train:
+    kwargs:
+      batch_mode: molecules
+      batch_size: 32
+
+# Option 2: Adaptive by atom count (recommended)
+samplers:
+  train:
+    kwargs:
+      batch_mode: atoms
+      batch_size: 4096  # Total atoms per batch
+```
+
+Atom-based batching balances GPU memory usage across molecular sizes.
+
+**Fidelity Weights:**
+
+```yaml
+# Equal weighting (default)
+data:
+  fidelity_weights:
+    0: 1.0
+    1: 1.0
+    2: 1.0
+
+# Prefer high-fidelity data
+data:
+  fidelity_weights:
+    0: 3.0  # 3x more samples from fidelity 0
+    1: 1.0
+    2: 0.5  # Half as many from fidelity 2
+```
+
+**Loss Component Weights:**
+
+```yaml
+loss:
+  kwargs:
+    components:
+      energy:
+        weight: 1.0      # Reference
+      forces:
+        weight: 0.5      # Important but 0.5× energy
+      charges:
+        weight: 0.01     # Much smaller contribution
+      spin_charges:
+        weight: 0.01
+```
+
+Typical ratios: Energy (1.0), Forces (0.1-1.0), Charges (0.001-0.1).
+
+### Scheduler Recommendations
+
+**For Exploratory Training (unknown optimal schedule):**
+
+```yaml
+scheduler:
+  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  kwargs:
+    metric_name: val_loss
+    factor: 0.9
+    patience: 2
+  terminate_on_low_lr: 1.0e-7
+```
+
+**For Production Training (known duration):**
+
+```yaml
+scheduler:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 2000000  # Full training run: 100 epochs × 20k batches
+```
+
+**For Finding Optimal LR:**
+
+Use short warm restarts to explore:
+```yaml
+scheduler:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 40000    # 2 epochs
+    cycle_mult: 2.0      # Double each cycle
+```
+
+See `examples/config/scheduler_examples.yaml` and `examples/SCHEDULER_GUIDE.md` for details.
+
+### Validation Frequency
+
+**Trade-offs:**
+
+```yaml
+# Frequent validation (more monitoring, slower training)
+log_frequency:
+  val: 100   # Every 100 iterations (~0.5% of epoch)
+
+# Standard (good balance)
+log_frequency:
+  val: 500   # Every 500 iterations (~2.5% of epoch)
+
+# Infrequent (faster training, less monitoring)
+log_frequency:
+  val: 5000  # Every 5000 iterations (~25% of epoch)
+```
+
+**Recommendation:**
+- Development: `val: 100-500` (frequent monitoring)
+- Production: `val: 1000-5000` (focus on training speed)
+
+### Common Issues
+
+**Issue: Training loss decreases but validation loss increases**
+
+**Solution:** Overfitting. Try:
+```yaml
+# Increase weight decay
+optimizer:
+  kwargs:
+    weight_decay: 1.0e-5  # Was 1.0e-6
+
+# Reduce model capacity
+model:
+  num_layers: 3  # Was 4
+```
+
+**Issue: Loss is NaN or explodes**
+
+**Solution:** Learning rate too high or gradient overflow. Try:
+```yaml
+# Reduce learning rate
+optimizer:
+  kwargs:
+    lr: 1.0e-5  # Was 5.0e-5
+
+# Increase gradient clipping (default is 0.4)
+# Edit engine.py to increase clip value
+```
+
+**Issue: One fidelity performs much worse than others**
+
+**Solution:** Check data quality and adjust weights:
+```yaml
+# Reduce weight for problematic fidelity
+data:
+  fidelity_weights:
+    0: 1.0
+    1: 0.2  # Problematic fidelity gets less weight
+    2: 1.0
+```
+
+**Issue: Validation metrics don't appear in WandB**
+
+**Solution:** Check configuration:
+```yaml
+# Ensure val logging is enabled
+wandb:
+  log_frequency:
+    val: 500  # Not null!
+
+# Check metrics are configured
+metrics:
+  class: aimnet2mult.train.metrics.RegMultiMetric
+  kwargs:
+    cfg: {...}  # Must be present
+```
+
+### Performance Optimization
+
+**GPU Memory Optimization:**
+
+```yaml
+# Reduce batch size
+data:
+  samplers:
+    train:
+      kwargs:
+        batch_size: 2048  # Was 4096
+
+# Use gradient accumulation (future feature)
+# Currently: manually reduce batch_size and increase batches_per_epoch
+```
+
+**Training Speed:**
+
+```yaml
+# Increase workers (if CPU allows)
+data:
+  loaders:
+    train:
+      num_workers: 8  # Was 4
+
+# Use pin_memory for GPU
+data:
+  loaders:
+    train:
+      pin_memory: true
+
+# Reduce validation frequency
+wandb:
+  log_frequency:
+    val: 2000  # Validate less often
+```
+
+**Multi-GPU Training (DDP):**
+
+```bash
+# Use torchrun for distributed training
+torchrun --nproc_per_node=4 -m aimnet2mult.train.cli \
+    --config train.yaml \
+    --model model.yaml \
+    --save model.pt \
+    ...
+```
+
+### Debugging Checklist
+
+Before opening an issue, verify:
+
+- [ ] SAE files exist and have correct format
+- [ ] HDF5 datasets have required keys (`coord`, `numbers`, `energy`)
+- [ ] Atomic numbers in data match SAE file
+- [ ] `fidelity_offset` matches compilation settings
+- [ ] Validation dataset is separate from training
+- [ ] WandB is logged in (`wandb login`)
+- [ ] PyTorch can access GPU (`torch.cuda.is_available()`)
+- [ ] All required dependencies installed
+
+### Resources
+
+- **Configuration Examples:** `examples/config/`
+- **Scheduler Guide:** `examples/SCHEDULER_GUIDE.md`
+- **Logging Verification:** `WANDB_LOGGING_VERIFICATION.md`
+- **Scheduler Update Summary:** `SCHEDULER_UPDATE_SUMMARY.md`
 
 ## License
 

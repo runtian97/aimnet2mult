@@ -89,7 +89,24 @@ def get_optimizer(model: nn.Module, cfg: omegaconf.DictConfig):
 
 def get_scheduler(optimizer: torch.optim.Optimizer, cfg: omegaconf.DictConfig):
     d = OmegaConf.to_container(cfg)
-    d['args'] = [optimizer]
+
+    # Check if this is an ignite ParamScheduler (vs PyTorch LRScheduler)
+    class_path = d.get('class', '')
+    is_ignite_scheduler = 'ignite.handlers.param_scheduler' in class_path and 'ReduceLROnPlateau' not in class_path
+
+    if is_ignite_scheduler:
+        # Ignite ParamScheduler needs optimizer and param_name in kwargs
+        if 'kwargs' not in d:
+            d['kwargs'] = {}
+        d['kwargs']['optimizer'] = optimizer
+        # Default param_name to 'lr' if not specified
+        if 'param_name' not in d['kwargs']:
+            d['kwargs']['param_name'] = 'lr'
+        d['args'] = []
+    else:
+        # PyTorch LRScheduler or ReduceLROnPlateau needs optimizer as first arg
+        d['args'] = [optimizer]
+
     scheduler = build_module(d)
     return scheduler
 
@@ -168,10 +185,11 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
 
     # Validation metrics logging
     if val_log_freq is not None:
-        # Log validation every N iterations
+        # Log validation metrics when validation completes
+        # (validation runs every val_log_freq training iterations, set in runner.py)
         wandb_logger.attach_output_handler(
             validator,
-            event_name=Events.ITERATION_COMPLETED(every=val_log_freq),
+            event_name=Events.COMPLETED,
             global_step_transform=lambda *_: trainer.state.iteration,
             metric_names="all",
             tag='val'

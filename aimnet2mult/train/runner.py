@@ -412,10 +412,44 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
         logging.info("Validation will run once per epoch (default)")
         trainer.add_event_handler(Events.EPOCH_COMPLETED(every=1), validator.run, data=val_loader)
 
+    # Copy validation metrics to trainer for scheduler access
+    # This allows metric-based schedulers (e.g., ReduceLROnPlateau) to use validation loss
+    @validator.on(Events.COMPLETED)
+    def _copy_val_metrics_to_trainer(engine):
+        if hasattr(engine.state, 'metrics') and engine.state.metrics:
+            if not hasattr(trainer.state, 'metrics'):
+                trainer.state.metrics = {}
+            # Copy validation loss as 'val_loss' for scheduler
+            if 'loss' in engine.state.metrics:
+                trainer.state.metrics['val_loss'] = engine.state.metrics['loss']
+            # Also copy all validation metrics with 'val_' prefix for reference
+            for key, value in engine.state.metrics.items():
+                trainer.state.metrics[f'val_{key}'] = value
+
     # Attach scheduler if configured
     if scheduler is not None:
         logging.info("Attaching learning rate scheduler: %s", type(scheduler).__name__)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
+
+        # Determine scheduler type and attach appropriately
+        scheduler_class_name = type(scheduler).__name__
+        is_metric_based = 'ReduceLROnPlateau' in scheduler_class_name
+        is_ignite_param_scheduler = hasattr(scheduler, 'optimizer') and hasattr(scheduler, 'param_name')
+
+        if is_metric_based:
+            # Metric-based schedulers step after validation completes
+            logging.info("Metric-based scheduler detected - will step after validation using validation loss")
+            # Step scheduler after validation completes (when val_loss is available)
+            @validator.on(Events.COMPLETED)
+            def _step_scheduler(engine):
+                scheduler(trainer)  # Scheduler reads from trainer.state.metrics['val_loss']
+        elif is_ignite_param_scheduler:
+            # Ignite param schedulers (e.g., CosineAnnealingScheduler) are called as functions
+            logging.info("Ignite param scheduler detected - will step every iteration")
+            trainer.add_event_handler(Events.ITERATION_STARTED, scheduler)
+        else:
+            # PyTorch LR schedulers step once per epoch
+            logging.info("PyTorch LR scheduler detected - will step once per epoch")
+            trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
 
         # Add early termination based on low LR if configured
         if hasattr(train_cfg.scheduler, 'terminate_on_low_lr'):

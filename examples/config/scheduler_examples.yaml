@@ -1,0 +1,325 @@
+# ============================================================================
+# Learning Rate Scheduler Examples for AIMNet2mult Training
+# ============================================================================
+# Choose ONE scheduler configuration below and copy to your train.yaml
+#
+# This package uses IGNITE schedulers by default for fine-grained control:
+# - Update per ITERATION (not per epoch) → smoother LR curves
+# - Support warmup, cycles, and complex schedules
+# - Better control over exact LR trajectory
+#
+# Schedulers are categorized into:
+# 1. Metric-based: Adjust LR based on validation performance
+# 2. Step-based: Adjust LR based on iteration count
+# ============================================================================
+#
+# IMPORTANT: Calculating cycle_size for Ignite schedulers
+# --------------------------------------------------------
+# Ignite schedulers use ITERATIONS, not epochs. To convert:
+#
+#   cycle_size = batches_per_epoch × num_epochs
+#
+# Example from your train.yaml:
+#   data.samplers.train.kwargs.batches_per_epoch: 20000
+#
+# For a 10-epoch cycle:
+#   cycle_size = 20000 iterations/epoch × 10 epochs = 200000 iterations
+#
+# For a single full training run (200 epochs):
+#   cycle_size = 20000 × 200 = 4000000 iterations
+#
+# Common patterns:
+#   - Short cycle (10 epochs): cycle_size = 200000
+#   - Medium cycle (50 epochs): cycle_size = 1000000
+#   - Full run (200 epochs): cycle_size = 4000000
+#   - Half run (100 epochs): cycle_size = 2000000
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 1. METRIC-BASED SCHEDULERS (Recommended for most cases)
+# ----------------------------------------------------------------------------
+# These monitor validation loss and reduce LR when improvement plateaus
+
+# ReduceLROnPlateau - Reduce LR when validation loss stops improving
+# Best for: General training, unknown optimal schedule
+# Pros: Adaptive, no need to tune schedule
+# Cons: Can be conservative, may reduce LR too late
+reducer_plateau:
+  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  kwargs:
+    metric_name: val_loss      # Use validation loss (avoids overfitting)
+    factor: 0.9                # Multiply LR by this factor when reducing
+    patience: 2                # Number of epochs with no improvement before reducing
+    min_delta: 0.0001          # Minimum change to qualify as improvement
+    cooldown: 0                # Epochs to wait before resuming normal operation
+  terminate_on_low_lr: 1.0e-7  # Stop training if LR drops below this value
+
+# Alternative: More aggressive reduction
+reducer_plateau_aggressive:
+  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  kwargs:
+    metric_name: val_loss
+    factor: 0.5                # Reduce LR by half (more aggressive)
+    patience: 5                # Wait longer before reducing
+  terminate_on_low_lr: 1.0e-7
+
+# ----------------------------------------------------------------------------
+# 2. STEP-BASED SCHEDULERS (Ignite - Iteration-level control)
+# ----------------------------------------------------------------------------
+# These follow a predetermined schedule, independent of validation performance
+# Ignite schedulers update per ITERATION for smoother control
+
+# LinearCyclicalScheduler - Linear warmup and decay cycles
+# Best for: Warm-up then decay, cyclical training
+# Pros: Smooth linear transitions, good for warmup
+# Cons: Less sophisticated than cosine
+linear_cyclical:
+  class: ignite.handlers.param_scheduler.LinearCyclicalScheduler
+  kwargs:
+    # param_name and optimizer added automatically
+    start_value: 1.0e-6        # Starting LR (warmup start)
+    end_value: 1.0e-4          # Peak LR (after warmup)
+    cycle_size: 2000           # Iterations per full cycle (up + down)
+  terminate_on_low_lr: 0.0
+
+# LinearCyclicalScheduler with warmup - Common pattern
+linear_warmup_decay:
+  class: ignite.handlers.param_scheduler.LinearCyclicalScheduler
+  kwargs:
+    start_value: 1.0e-6        # Start from low LR
+    end_value: 1.0e-4          # Warmup to this
+    cycle_size: 1000           # 1000 iters up, 1000 iters down
+  terminate_on_low_lr: 0.0
+
+# ConcatScheduler - Combine multiple schedulers
+# Best for: Complex schedules (warmup → plateau → decay)
+# Example: Linear warmup, then cosine decay
+concat_warmup_cosine:
+  class: ignite.handlers.param_scheduler.ConcatScheduler
+  kwargs:
+    schedulers:
+      - class: ignite.handlers.param_scheduler.LinearCyclicalScheduler
+        kwargs:
+          start_value: 1.0e-6
+          end_value: 1.0e-4
+          cycle_size: 1000     # 500 iters up, 500 down (use half)
+        duration: 500          # Use only first half (warmup)
+      - class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+        kwargs:
+          start_value: 1.0e-4
+          end_value: 1.0e-6
+          cycle_size: 10000    # Long decay phase
+    # Note: Complex to configure, see ignite docs
+  terminate_on_low_lr: 0.0
+
+# For reference - PyTorch schedulers (epoch-based, less fine-grained)
+# Uncomment if you prefer epoch-based updates:
+# step_lr_pytorch:
+#   class: torch.optim.lr_scheduler.StepLR
+#   kwargs:
+#     step_size: 30              # Reduce LR every N epochs
+#     gamma: 0.1                 # Multiply LR by this factor
+#   terminate_on_low_lr: null
+
+# ----------------------------------------------------------------------------
+# 3. COSINE SCHEDULERS (Popular for deep learning)
+# ----------------------------------------------------------------------------
+# Smooth cosine-based decay with optional restarts
+
+# Ignite CosineAnnealingScheduler - Iteration-based cosine decay
+# Best for: Fine-grained control over LR schedule
+# Pros: Updates every iteration (smoother), supports cycle multipliers
+# Cons: Need to calculate cycle_size in iterations
+cosine_annealing_ignite:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    # param_name and optimizer are added automatically
+    start_value: 1.0e-4        # Starting learning rate
+    end_value: 1.0e-6          # Minimum learning rate at end of cycle
+    cycle_size: 200            # Iterations per cycle (NOT epochs)
+    cycle_mult: 1.0            # Multiply cycle_size after each cycle (1.0 = constant)
+    start_value_mult: 1.0      # Multiply start_value after each cycle
+    end_value_mult: 1.0        # Multiply end_value after each cycle
+    warmup_duration: 0         # Optional warmup iterations
+  terminate_on_low_lr: 0.0     # Can set to 0.0 if using cycle_mult > 1.0
+
+# Example: Multiple cycles with decreasing amplitude
+cosine_annealing_ignite_decay:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 1000           # 1000 iterations per cycle
+    cycle_mult: 1.0            # Keep cycle length constant
+    start_value_mult: 0.9      # Reduce peak LR by 10% each cycle
+    end_value_mult: 1.0        # Keep minimum LR constant
+  terminate_on_low_lr: 0.0
+
+# Example: Increasing cycle length (warm restarts)
+cosine_annealing_ignite_restarts:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 500            # First cycle: 500 iterations
+    cycle_mult: 2.0            # Double cycle length each time
+    start_value_mult: 1.0      # Keep peak LR constant
+    end_value_mult: 1.0
+  terminate_on_low_lr: 0.0
+# Cycle schedule:
+# - Cycle 1: iterations 0-499 (500 iters)
+# - Cycle 2: iterations 500-1499 (1000 iters)
+# - Cycle 3: iterations 1500-3499 (2000 iters)
+
+# PyTorch CosineAnnealingLR - Epoch-based cosine decay
+# Best for: Long training runs, modern architectures
+# Pros: Smooth schedule, often better final performance
+# Cons: Need to know total training epochs, updates per epoch
+cosine_annealing_pytorch:
+  class: torch.optim.lr_scheduler.CosineAnnealingLR
+  kwargs:
+    T_max: 100                 # Half-period of cosine (total epochs / 2)
+    eta_min: 1.0e-7            # Minimum learning rate
+  terminate_on_low_lr: null
+
+# CosineAnnealingScheduler with warm restarts (Ignite)
+# Best for: Exploring multiple local minima, iteration-level control
+# Pros: Escapes local minima, smoother than epoch-based
+# Cons: Need to calculate cycle_size in iterations
+cosine_warm_restarts_ignite:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 2000           # First cycle: 2000 iterations
+    cycle_mult: 2.0            # Double cycle length after each restart
+    start_value_mult: 1.0      # Keep peak LR constant (or set < 1.0 to decay)
+    end_value_mult: 1.0
+  terminate_on_low_lr: 0.0
+
+# Example with cycle_size=2000, cycle_mult=2.0:
+# - First cycle: iterations 0-1999 (2000 iters)
+# - Second cycle: iterations 2000-5999 (4000 iters)
+# - Third cycle: iterations 6000-13999 (8000 iters)
+# - Fourth cycle: iterations 14000-29999 (16000 iters)
+
+# For reference - PyTorch CosineAnnealingWarmRestarts (epoch-based)
+# cosine_warm_restarts_pytorch:
+#   class: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+#   kwargs:
+#     T_0: 10                    # Epochs until first restart
+#     T_mult: 2                  # Multiply T_i by this after each restart
+#     eta_min: 1.0e-7            # Minimum learning rate
+#   terminate_on_low_lr: null
+
+# ----------------------------------------------------------------------------
+# 4. ADVANCED SCHEDULERS
+# ----------------------------------------------------------------------------
+
+# OneCycleLR - Cyclical LR with warm-up (used in fast.ai)
+# Best for: Fast convergence, limited training time
+# Pros: Fast training, good regularization
+# Cons: Requires knowing total steps, sensitive to hyperparameters
+one_cycle:
+  class: torch.optim.lr_scheduler.OneCycleLR
+  kwargs:
+    max_lr: 0.0001             # Maximum learning rate
+    total_steps: null          # Will be set automatically based on epochs
+    epochs: 200                # Total training epochs
+    steps_per_epoch: 20000     # Match batches_per_epoch in data config
+    pct_start: 0.3             # Percentage of cycle spent increasing LR
+    anneal_strategy: 'cos'     # 'cos' or 'linear'
+    div_factor: 25.0           # Initial LR = max_lr / div_factor
+    final_div_factor: 10000.0  # Final LR = max_lr / final_div_factor
+  terminate_on_low_lr: null
+
+# CyclicLR - Cyclical learning rate (triangular/exponential)
+# Best for: Finding optimal LR range
+cyclic_lr:
+  class: torch.optim.lr_scheduler.CyclicLR
+  kwargs:
+    base_lr: 1.0e-6            # Minimum learning rate
+    max_lr: 1.0e-4             # Maximum learning rate
+    step_size_up: 2000         # Iterations to increase from base to max
+    mode: 'triangular2'        # 'triangular', 'triangular2', or 'exp_range'
+    gamma: 0.9999              # Decay factor (for exp_range mode)
+  terminate_on_low_lr: null
+
+# ----------------------------------------------------------------------------
+# USAGE NOTES
+# ----------------------------------------------------------------------------
+#
+# 1. Metric-based schedulers (ReduceLROnPlateau):
+#    - Automatically steps after validation completes
+#    - Uses validation loss by default (prevents overfitting)
+#    - Good for exploratory training
+#
+# 2. Step-based schedulers (Cosine, Step, etc.):
+#    - Step once per epoch automatically
+#    - Independent of validation performance
+#    - Good when you know optimal schedule
+#
+# 3. Choosing a scheduler:
+#    - Starting out? Use ReduceLROnPlateau
+#    - Know your schedule? Use CosineAnnealingLR
+#    - Fast training? Use OneCycleLR
+#    - Finding LR range? Use CyclicLR then switch
+#
+# 4. terminate_on_low_lr:
+#    - Set to stop training when LR becomes too small
+#    - Useful for metric-based schedulers
+#    - Set to null for schedulers that naturally end (e.g., OneCycle)
+#
+# 5. Integration with validation frequency:
+#    - ReduceLROnPlateau steps after each validation run
+#    - Other schedulers step once per epoch (independent of validation)
+#    - Set log_frequency.val to control validation frequency
+#
+# ----------------------------------------------------------------------------
+# RECOMMENDED CONFIGURATIONS (Using Ignite Schedulers)
+# ----------------------------------------------------------------------------
+
+# For general training (unknown optimal schedule):
+# Adaptive - reduces LR when validation loss plateaus
+recommended_general:
+  class: ignite.handlers.param_scheduler.ReduceLROnPlateauScheduler
+  kwargs:
+    metric_name: val_loss
+    factor: 0.9
+    patience: 2
+  terminate_on_low_lr: 1.0e-7
+
+# For long training with known iteration budget:
+# Smooth cosine decay per iteration (NOT per epoch)
+recommended_long:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 20000          # Total iterations/batches for one full cycle
+                               # Example: 200 epochs × 100 iters/epoch = 20000
+    cycle_mult: 1.0
+  terminate_on_low_lr: 0.0
+
+# For exploring multiple minima (warm restarts):
+# Periodic restarts help escape local minima
+recommended_restarts:
+  class: ignite.handlers.param_scheduler.CosineAnnealingScheduler
+  kwargs:
+    start_value: 1.0e-4
+    end_value: 1.0e-6
+    cycle_size: 2000           # First restart after 2000 iterations
+    cycle_mult: 2.0            # Double period each restart
+    start_value_mult: 0.95     # Slightly reduce peak LR each restart
+  terminate_on_low_lr: 0.0
+
+# For warmup + decay pattern:
+# Linear warmup to peak, then stay or decay
+recommended_warmup:
+  class: ignite.handlers.param_scheduler.LinearCyclicalScheduler
+  kwargs:
+    start_value: 1.0e-6        # Start low
+    end_value: 1.0e-4          # Warmup to peak
+    cycle_size: 2000           # 1000 iters up, 1000 iters down
+  terminate_on_low_lr: 0.0
