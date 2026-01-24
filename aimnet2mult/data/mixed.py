@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
+
+import numpy as np
 
 from .sgdataset import SizeGroupedDataset
-
 from .base import MultiFidelityDataset
 
 __all__ = ["MixedFidelityDataset"]
@@ -89,18 +90,33 @@ class MixedFidelityDataset(MultiFidelityDataset):
             )
         return result
 
-    def get_loader_batch(self, indices: List[Tuple[int, str, int]]):
-        batch = []
-        for fid, group_key, mol_idx in indices:
-            dataset = self.get_dataset(fid)
-            group = dataset[group_key]
-            x = {}
-            y = {}
-            for key in self.x_keys:
-                if key in group:
-                    x[key] = group[key][mol_idx]
-            for key in self.y_keys:
-                if key in group:
-                    y[key] = group[key][mol_idx]
-            batch.append((x, y, fid))
-        return batch
+    def get_loader_batch(self, batch_indices: Tuple[int, int, np.ndarray]):
+        """
+        Efficiently retrieve a batch using array indexing.
+
+        Args:
+            batch_indices: Tuple of (fidelity, group_key, indices_array)
+                          where indices_array is a numpy array of molecule indices.
+
+        Returns:
+            Tuple of (x_dict, y_dict, fidelities_array) with batched data.
+        """
+        fid, group_key, indices = batch_indices
+        dataset = self.get_dataset(fid)
+        group = dataset[group_key]
+
+        # Efficient batch indexing - single NumPy operation per key
+        x = {}
+        for key in self.x_keys:
+            if key in group:
+                x[key] = group[key][indices]
+
+        y = {}
+        for key in self.y_keys:
+            if key in group:
+                y[key] = group[key][indices]
+
+        # Create fidelity array for the batch
+        fidelities = np.full(len(indices), fid, dtype=np.int64)
+
+        return x, y, fidelities
