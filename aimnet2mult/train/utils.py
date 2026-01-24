@@ -126,6 +126,16 @@ def prepare_batch(batch: Dict[str, Tensor], device='cuda', non_blocking=True) ->
 
 
 def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
+    """
+    Setup Weights & Biases logging.
+
+    Logging frequency can be configured via:
+        wandb:
+          log_frequency:
+            train: 200      # Log train loss every N iterations (default: 200)
+            val: 1000       # Log validation metrics every N iterations
+                            # If not set, logs per epoch (default behavior)
+    """
     import wandb
     from ignite.handlers import WandBLogger, global_step_from_engine
     from ignite.handlers.wandb_logger import OptimizerParamsHandler
@@ -137,18 +147,43 @@ def setup_wandb(cfg, model_cfg, model, trainer, validator, optimizer):
     OmegaConf.save(model_cfg, wandb.run.dir + '/model.yaml')
     OmegaConf.save(cfg, wandb.run.dir + '/train.yaml')
 
+    # Get logging frequencies from config (with defaults)
+    log_freq_cfg = getattr(cfg.wandb, 'log_frequency', None)
+    train_log_freq = 200  # default
+    val_log_freq = None   # None means per-epoch
+
+    if log_freq_cfg is not None:
+        train_log_freq = getattr(log_freq_cfg, 'train', 200)
+        val_log_freq = getattr(log_freq_cfg, 'val', None)
+
+    logging.info(f"WandB logging: train every {train_log_freq} iters, val every {val_log_freq or 'epoch'}")
+
+    # Train loss logging
     wandb_logger.attach_output_handler(
         trainer,
-        event_name=Events.ITERATION_COMPLETED(every=200),
+        event_name=Events.ITERATION_COMPLETED(every=train_log_freq),
         output_transform=lambda loss: {"loss": loss},
         tag='train'
+    )
+
+    # Validation metrics logging
+    if val_log_freq is not None:
+        # Log validation every N iterations
+        wandb_logger.attach_output_handler(
+            validator,
+            event_name=Events.ITERATION_COMPLETED(every=val_log_freq),
+            global_step_transform=lambda *_: trainer.state.iteration,
+            metric_names="all",
+            tag='val'
         )
-    wandb_logger.attach_output_handler(
-        validator,
-        event_name=Events.EPOCH_COMPLETED,
-        global_step_transform=lambda *_: trainer.state.iteration,
-        metric_names="all",
-        tag='val'
+    else:
+        # Default: log validation per epoch
+        wandb_logger.attach_output_handler(
+            validator,
+            event_name=Events.EPOCH_COMPLETED,
+            global_step_transform=lambda *_: trainer.state.iteration,
+            metric_names="all",
+            tag='val'
         )
 
     class EpochLRLogger(OptimizerParamsHandler):

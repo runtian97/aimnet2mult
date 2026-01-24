@@ -129,6 +129,10 @@ wandb:
     log: all
     log_freq: 1000
     log_graph: true
+  # Logging frequency (iterations) - does NOT affect scheduler/optimizer
+  log_frequency:
+    train: 500    # Log train loss every 500 iterations
+    val: 5000     # Log val metrics every 5000 iterations (null = per epoch)
 
 # Metrics
 metrics:

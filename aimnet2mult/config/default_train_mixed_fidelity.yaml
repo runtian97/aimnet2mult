@@ -175,6 +175,10 @@ wandb:
     log: all
     log_freq: 1000
     log_graph: true
+  # Logging frequency (iterations) - does NOT affect scheduler/optimizer
+  log_frequency:
+    train: 200    # Log train loss every N iterations
+    val: null     # Log val metrics every N iterations (null = per epoch)
 
 # Metrics configuration (same format as base aimnet2)
 # Internal units: Energy (eV), Forces (eV/Angstrom), Charges (e)
