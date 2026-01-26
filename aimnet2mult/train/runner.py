@@ -481,9 +481,7 @@ def _attach_events(trainer, validator, optimizer, scheduler, train_cfg, val_load
 
         checkpointer = ModelCheckpoint(**kwargs)
 
-        # Prepare checkpoint objects dict
-        to_save = {"model": unwrap_module(model), "optimizer": optimizer}
-        if scheduler is not None:
-            to_save["scheduler"] = scheduler
+        # Prepare checkpoint objects dict - only save model weights
+        to_save = {"model": unwrap_module(model)}
 
         validator.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, to_save)

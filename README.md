@@ -714,12 +714,10 @@ checkpoint:
 ```python
 checkpoint = {
   'model': model.state_dict(),
-  'optimizer': optimizer.state_dict(),
-  'scheduler': scheduler.state_dict(),  # For resuming
-  'epoch': current_epoch,
-  'iteration': global_iteration,
 }
 ```
+
+Note: Only model weights are saved. Optimizer and scheduler states are not saved to reduce checkpoint size and simplify transfer learning.
 
 **Automatic Saving:**
 - After each validation run
@@ -729,22 +727,21 @@ checkpoint = {
 
 ### Transfer Learning / Continue Training
 
-Resume from checkpoint with full state restoration:
+Resume from checkpoint:
 
 ```bash
 python -m aimnet2mult.train.cli \
     --config train.yaml \
     --model model.yaml \
-    --load checkpoint.pt \   # Restores model, optimizer, scheduler
+    --load checkpoint.pt \   # Restores model weights only
     --save continued.pt \
     ...
 ```
 
 **What Gets Restored:**
 - Model weights (including all fidelity readouts)
-- Optimizer state (momentum, adaptive LR, etc.)
-- Scheduler state (current cycle, iteration count)
-- Epoch and iteration counters
+
+Note: Optimizer and scheduler states are not saved in checkpoints. Training will start with a fresh optimizer/scheduler state.
 
 **Fine-Tuning Strategy:**
 - Load pretrained weights
