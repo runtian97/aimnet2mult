@@ -140,7 +140,10 @@ wandb:
   # Logging frequency (iterations)
   log_frequency:
     train: 500    # Log train loss every 500 iterations
-    val: 500      # Run validation and log metrics every 500 iterations
+         
+
+log_frequency:
+  val: 500  # Run validation and log metrics every 500 iterations
 
 # Metrics
 metrics:
