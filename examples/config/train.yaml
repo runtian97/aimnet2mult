@@ -145,8 +145,10 @@ wandb:
   # Logging frequency (iterations) - does NOT affect scheduler/optimizer
   log_frequency:
     train: 500    # Log train loss every 500 iterations
-    val: 500     # Log val metrics every 500 iterations (null = per epoch)
+         
 
+log_frequency:
+  val: 500 # Log val metrics every 500 iterations (null = per epoch)
 # Metrics
 metrics:
   class: aimnet2mult.train.metrics.RegMultiMetric
