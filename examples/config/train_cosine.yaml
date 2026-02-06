@@ -87,14 +87,38 @@ optimizer:
     weight_decay: 1e-6
     betas: [0.9, 0.999]
     eps: 1e-8
+  # Parameter groups for fine-tuning (6 groups covering 30 learnable params)
+  # Each group can override: lr, weight_decay, betas, eps
+  # Note: lr is overwritten by Ignite CosineAnnealingScheduler (same value for all groups)
+  #       weight_decay is NOT affected by scheduler
+  #
+  # Non-learnable (requires_grad=False): aev.* (radial basis functions are fixed)
+  # No learnable params: LRCoulomb (rc is a buffer)
   param_groups:
+    # Atomic embeddings (1 param) - no weight decay
     embeddings:
-      re: 'afv.weight'
-      lr: 0.000025
+      re: 'afv\.weight'
       weight_decay: 0.0
+    # Atomic energy shifts (1 param) - no weight decay (physical values)
     shifts:
-      re: '.*.atomic_shift.shifts.weight'
+      re: '.*atomic_shift\.shifts\.weight'
       weight_decay: 0.0
+    # Atomic convolution layers (1 param)
+    conv_a:
+      re: 'conv_a\.'
+      weight_decay: 1e-6
+    # Charge convolution layers (1 param)
+    conv_q:
+      re: 'conv_q\.'
+      weight_decay: 1e-6
+    # Message passing MLPs - backbone (20 params)
+    mlps:
+      re: 'mlps\.'
+      weight_decay: 1e-6
+    # Energy output MLP (6 params)
+    outputs_energy_mlp:
+      re: 'outputs\.energy_mlp\.'
+      weight_decay: 1e-6
 
 # Learning rate scheduler - Ignite CosineAnnealingScheduler
 scheduler:

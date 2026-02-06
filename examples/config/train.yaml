@@ -76,24 +76,54 @@ loss:
           key_true: spin_charges
           key_pred: spin_charges
 
-# Optimizer
+# Optimizer - RAdam with per-group learning rates
+# RAdam: Rectified Adam - more stable training, less sensitive to lr choice
 optimizer:
   force_no_train: []
   force_train: []
-  class: torch.optim.AdamW
+  class: torch.optim.RAdam
   kwargs:
-    lr: 0.00005
+    lr: 1e-4              # Base learning rate (default for unmatched params)
     weight_decay: 1e-6
     betas: [0.9, 0.999]
     eps: 1e-8
+  # Parameter groups for fine-tuning (6 groups covering 30 learnable params)
+  # Each group can override: lr, weight_decay, betas, eps
+  # ReduceLROnPlateau scales all lr values proportionally
+  #
+  # Non-learnable (requires_grad=False): aev.* (radial basis functions are fixed)
+  # No learnable params: LRCoulomb (rc is a buffer)
   param_groups:
+    # Atomic embeddings (1 param) - lower lr for stable embedding learning
     embeddings:
-      re: 'afv.weight'
-      lr: 0.000025
+      re: 'afv\.weight'
+      lr: 5e-5            # 0.5x base - embeddings need careful updates
       weight_decay: 0.0
+    # Atomic energy shifts (1 param) - lower lr for physical values
     shifts:
-      re: '.*.atomic_shift.shifts.weight'
+      re: '.*atomic_shift\.shifts\.weight'
+      lr: 5e-5            # 0.5x base - per-element reference energies
       weight_decay: 0.0
+    # Atomic convolution layers (1 param)
+    conv_a:
+      re: 'conv_a\.'
+      lr: 1e-4            # 1x base
+      weight_decay: 1e-6
+    # Charge convolution layers (1 param)
+    conv_q:
+      re: 'conv_q\.'
+      lr: 1e-4            # 1x base
+      weight_decay: 1e-6
+    # Message passing MLPs - backbone (20 params)
+    mlps:
+      re: 'mlps\.'
+      lr: 1e-4            # 1x base - main learnable part
+      weight_decay: 1e-6
+    # Energy output MLP (6 params)
+    outputs_energy_mlp:
+      re: 'outputs\.energy_mlp\.'
+      lr: 1e-4            # 1x base
+      weight_decay: 1e-6
 
 # Learning rate scheduler
 scheduler:
@@ -101,7 +131,7 @@ scheduler:
   kwargs:
     metric_name: val_loss  # Use validation loss (recommended to avoid overfitting)
     factor: 0.9
-    patience: 2
+    patience: 3
   terminate_on_low_lr: 1.0e-7
 
 # Alternative: Ignite Cosine Annealing scheduler (uncomment to use)
@@ -148,7 +178,7 @@ wandb:
          
 
 log_frequency:
-  val: 500 # Log val metrics every 500 iterations (null = per epoch)
+  val: 20000 # Log val metrics every 500 iterations (null = per epoch)
 # Metrics
 metrics:
   class: aimnet2mult.train.metrics.RegMultiMetric

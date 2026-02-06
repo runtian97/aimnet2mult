@@ -45,8 +45,8 @@ def create_trainer(model: nn.Module, optimizer, loss_fn, device, use_base_model:
             raise ValueError("Loss function returned a dict without 'loss' key.")
 
         total_loss.backward()
-        # Gradient clipping for stability (same as aimnet2)
-        torch.nn.utils.clip_grad_value_(model.parameters(), 0.4)
+        # Gradient norm clipping for stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         # Store pred and y for metrics computation
