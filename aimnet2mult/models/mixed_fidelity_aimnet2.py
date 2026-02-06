@@ -40,8 +40,9 @@ class MixedFidelityAIMNet2(AIMNet2):
             use_fidelity_readouts: If True, use separate readouts per fidelity
         """
         # Calculate max atomic number needed
+        # Fidelity levels are 0..num_fidelities-1, so max offset is (num_fidelities-1)*fidelity_offset
         max_z_base = 128
-        max_z_total = num_fidelities * fidelity_offset + max_z_base
+        max_z_total = (num_fidelities - 1) * fidelity_offset + max_z_base
 
         # Build base model using aimnet.config.build_module
         from ..config import build_module
@@ -105,8 +106,9 @@ class MixedFidelityAIMNet2(AIMNet2):
         self.shared_readouts = nn.ModuleDict()
 
         # Calculate max atomic number for all fidelities
+        # Fidelity levels are 0..num_fidelities-1, so max offset is (num_fidelities-1)*fidelity_offset
         max_z_base = 128
-        max_z_total = self.num_fidelities * self.fidelity_offset + max_z_base
+        max_z_total = (self.num_fidelities - 1) * self.fidelity_offset + max_z_base
 
         # Build one set of outputs to identify shared vs fidelity-specific
         if isinstance(config, dict) and 'kwargs' in config:

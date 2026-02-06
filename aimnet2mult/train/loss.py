@@ -146,12 +146,23 @@ def mse_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: 
     return l
 
 
-def peratom_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str) -> Tensor:
+def peratom_loss_fn(y_pred: Dict[str, Tensor], y_true: Dict[str, Tensor], key_pred: str, key_true: str,
+                    missing_label_regularization: float = 0.0) -> Tensor:
     """ MSE loss function with per-atom normalization correction.
     Suitable when some of the values are zero both in y_pred and y_true due to padding of inputs.
     Returns zero loss if the key is missing from y_true or y_pred.
+
+    Args:
+        missing_label_regularization: When > 0 and the label key is missing from y_true,
+            return a small L2 penalty on the predicted values instead of zero.
+            This prevents unconstrained drift of predictions (e.g. charges) when
+            one fidelity lacks labels, stabilizing training via LRCoulomb.
     """
     if key_true not in y_true or key_pred not in y_pred:
+        if missing_label_regularization > 0.0 and key_pred in y_pred:
+            # Regularize: penalize predictions toward zero when no labels exist
+            pred = y_pred[key_pred]
+            return missing_label_regularization * pred.pow(2).mean()
         # Key not present - return zero loss
         # Find any tensor to get device/dtype
         for v in y_pred.values():
