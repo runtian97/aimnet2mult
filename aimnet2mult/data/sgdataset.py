@@ -388,7 +388,7 @@ class SizeGroupedDataset:
             F = np.concatenate([eye[g[numbers_key]].sum(-2)
                                 for g in self.values()])
             sap = np.linalg.lstsq(F, E, rcond=None)[0]
-            present_elements = np.nonzero(F.sum(0))[0]
+            present_elements = np.nonzero(F.astype(np.int64).sum(0))[0]
         else:
             ntyp = max(sap_dict.keys()) + 1
             sap = np.zeros(ntyp) * np.nan
