@@ -133,6 +133,9 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
                     expanded_afv = torch.zeros(current_afv_size, pretrained_afv.shape[1])
                     expanded_afv[:pretrained_size] = pretrained_afv
                     state_dict['afv.weight'] = expanded_afv
+                elif pretrained_size > current_afv_size:
+                    logging.info(f"Truncating afv embedding from {pretrained_size} to {current_afv_size}")
+                    state_dict['afv.weight'] = pretrained_afv[:current_afv_size]
 
             # Handle atomic shift embeddings similarly
             for key in list(state_dict.keys()):
@@ -156,6 +159,9 @@ def _train_impl(local_rank, model_cfg, train_cfg, load_path, save_path):
                             expanded_shifts = torch.zeros(current_size, pretrained_shifts.shape[1])
                             expanded_shifts[:pretrained_size] = pretrained_shifts
                             state_dict[key] = expanded_shifts
+                        elif pretrained_size > current_size:
+                            logging.info(f"Truncating {key} from {pretrained_size} to {current_size}")
+                            state_dict[key] = pretrained_shifts[:current_size]
 
         result = unwrapped.load_state_dict(state_dict, strict=False)
         logging.info(result)
